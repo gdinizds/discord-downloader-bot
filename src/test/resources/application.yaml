@@ -33,12 +33,14 @@ downloader:
   ffmpeg-path: /usr/bin/ffmpeg
   tmp-dir: /tmp/discord-downloads-test
   discord-max-file-bytes: 26214400
+  processing-timeout-seconds: 50
 
 topics:
   inbound-interactions: discord.events.interaction.command
   inbound-commands: discord.events.message.command
   outbound-responses: discord.gateway.responses
   gateway-commands: discord.gateway.commands
+  guild-updated: discord.events.guild.updated
 
 management:
   health:

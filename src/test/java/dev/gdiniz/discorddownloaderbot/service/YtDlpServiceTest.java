@@ -22,7 +22,7 @@ class YtDlpServiceTest {
     void setUp() throws Exception {
         var s3Props = new DownloaderProperties.S3Properties("http://localhost:3900", "bucket", "key", "secret", "garage");
         var props = new DownloaderProperties(s3Props, "/nonexistent/yt-dlp", "/usr/bin/ffmpeg",
-                "/tmp/discord-downloads", 26214400L);
+                "/tmp/discord-downloads", 26214400L, 50);
         service = new YtDlpService(props);
     }
 
