@@ -1,0 +1,46 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: ""
+
+  jpa:
+    hibernate:
+      ddl-auto: none
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false
+
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers:localhost:9092}
+    consumer:
+      group-id: discord-downloader-test
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+downloader:
+  s3:
+    endpoint: http://localhost:3900
+    bucket: test-bucket
+    access-key: test
+    secret-key: test
+  ytdlp-path: /usr/local/bin/yt-dlp
+  ffmpeg-path: /usr/bin/ffmpeg
+  tmp-dir: /tmp/discord-downloads-test
+  discord-max-file-bytes: 26214400
+
+topics:
+  inbound-interactions: discord.events.interaction.command
+  inbound-commands: discord.events.message.command
+  outbound-responses: discord.gateway.responses
+  gateway-commands: discord.gateway.commands
+
+management:
+  health:
+    circuitbreakers:
+      enabled: false

@@ -1,0 +1,11 @@
+.gradle
+build
+.idea
+*.iml
+*.ipr
+*.iws
+out
+.env*
+k8s
+*.md
+src/test

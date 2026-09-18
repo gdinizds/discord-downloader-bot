@@ -1,0 +1,134 @@
+spring:
+  application:
+    name: discord-downloader-bot
+
+  threads:
+    virtual:
+      enabled: true
+
+  kafka:
+    bootstrap-servers: ${REDPANDA_BOOTSTRAP_SERVERS}
+    consumer:
+      group-id: discord-downloader
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        default_schema: downloader
+
+  flyway:
+    url: ${DB_URL}
+    user: ${DB_FLYWAY_USERNAME}
+    password: ${DB_FLYWAY_PASSWORD}
+    locations: classpath:db/migration
+    default-schema: downloader
+    schemas: downloader
+
+downloader:
+  s3:
+    endpoint: ${GARAGE_ENDPOINT}
+    bucket: ${GARAGE_BUCKET}
+    access-key: ${GARAGE_ACCESS_KEY}
+    secret-key: ${GARAGE_SECRET_KEY}
+    region: ${GARAGE_REGION:garage}
+  ytdlp-path: /usr/local/bin/yt-dlp
+  ytdlp-update-cron: "0 0 4 * * *"
+  ffmpeg-path: /usr/bin/ffmpeg
+  tmp-dir: /tmp/discord-downloads
+  discord-max-file-bytes: 26214400
+  processing-timeout-seconds: 50
+
+topics:
+  inbound-interactions: discord.events.interaction.command
+  inbound-commands: discord.events.message.command
+  outbound-responses: discord.gateway.responses
+  gateway-commands: discord.gateway.commands
+  guild-updated: discord.events.guild.updated
+
+resilience4j:
+  circuitbreaker:
+    instances:
+      ytdlp:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+      ffmpeg:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 30s
+        permittedNumberOfCallsInHalfOpenState: 3
+      s3Upload:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 60s
+        permittedNumberOfCallsInHalfOpenState: 3
+      database:
+        slidingWindowSize: 10
+        failureRateThreshold: 50
+        waitDurationInOpenState: 15s
+        permittedNumberOfCallsInHalfOpenState: 3
+
+  retry:
+    instances:
+      ytdlpRetry:
+        maxAttempts: 2
+        waitDuration: 2s
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+      s3Retry:
+        maxAttempts: 3
+        waitDuration: 1s
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+      databaseRetry:
+        maxAttempts: 3
+        waitDuration: 500ms
+        enableExponentialBackoff: true
+        exponentialBackoffMultiplier: 2
+
+  bulkhead:
+    instances:
+      ytdlpBulkhead:
+        maxConcurrentCalls: 5
+        maxWaitDuration: 10s
+      ffmpegBulkhead:
+        maxConcurrentCalls: 3
+        maxWaitDuration: 10s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, info, prometheus, metrics, circuitbreakers, retries
+  endpoint:
+    health:
+      show-details: always
+      probes:
+        enabled: true
+  health:
+    circuitbreakers:
+      enabled: true
+    diskspace:
+      enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  otlp:
+    tracing:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318/v1/traces}
+  prometheus:
+    metrics:
+      export:
+        enabled: true
