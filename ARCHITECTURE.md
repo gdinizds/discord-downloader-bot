@@ -57,7 +57,11 @@ Microserviço que baixa vídeos/imagens de links (YouTube, TikTok, Instagram, X/
 
 ### Infra / Deploy
 - **Docker** multi-stage build (`eclipse-temurin:25-jdk-noble` para build, `eclipse-temurin:25-jre-noble` para runtime)
-- **Kubernetes** (manifests em `k8s/`) — namespace, deployment, service, configmap, secret
+- **Kubernetes** (cluster `hotbct`, manifests em `k8s/`) — namespace, deployment, service, serviceaccount
+- **Spring Cloud Consul Config** (`spring-cloud-starter-consul-config`) — config não-sensível externalizada (hoje só `spring.kafka.bootstrap-servers`), lida de `config/discord-downloader-bot/data`
+- **Vault Agent Injector** (sidecar, annotations em `k8s/deployment.yaml`) — segredos de banco e S3/Garage, injetados em `/vault/secrets/*.yaml`; a app nunca fala com o Vault diretamente
+- **GitHub Actions** (`.github/workflows/`) — `ci.yml` roda a suíte de testes em todo push/PR pra `main`; `release.yml` builda e publica a imagem em `ghcr.io/gdinizds/discord-downloader-bot` a cada tag `v*.*.*`
+- Ver `docs/infra-reference.md` para os paths reais do Vault/Consul e o que fica pendente fora deste repo (GitOps em `gdinizds/fleet-infra`)
 
 ---
 
@@ -75,12 +79,14 @@ discord-downloader-bot/
 ├── METRICS.md                      # documentação das métricas expostas
 ├── ARCHITECTURE.md                 # este arquivo
 │
-├── k8s/                            # manifests Kubernetes
+├── .github/workflows/               # CI (testes) e Release (build + push GHCR por tag)
+├── docs/
+│   └── infra-reference.md          # paths reais do Vault/Consul, comandos kv put, pendências de GitOps
+├── k8s/                            # manifests Kubernetes (cluster hotbct)
 │   ├── namespace.yaml
-│   ├── deployment.yaml             # Deployment (2 réplicas, probes, volumes)
-│   ├── service.yaml
-│   ├── configmap.yaml              # env vars não sensíveis
-│   └── secret.yaml                 # secrets (DB, S3, cookies do yt-dlp, etc.)
+│   ├── serviceaccount.yaml         # usado pelo Vault Kubernetes Auth Method
+│   ├── deployment.yaml             # Deployment (2 réplicas, probes, volumes, annotations do Vault Agent)
+│   └── service.yaml
 │
 └── src/
     ├── main/

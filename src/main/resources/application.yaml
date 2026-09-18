@@ -1,23 +1,28 @@
 spring:
   application:
     name: discord-downloader-bot
+  config:
+    import: "optional:consul:,optional:file:/vault/secrets/db.yaml,optional:file:/vault/secrets/s3.yaml"
+
+  cloud:
+    consul:
+      host: ${SPRING_CLOUD_CONSUL_HOST:consul.consul.svc.cluster.local}
+      port: ${SPRING_CLOUD_CONSUL_PORT:8500}
+      config:
+        enabled: true
+        format: YAML
+        data-key: data
 
   threads:
     virtual:
       enabled: true
 
   kafka:
-    bootstrap-servers: ${REDPANDA_BOOTSTRAP_SERVERS}
     consumer:
       group-id: discord-downloader
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
-
-  datasource:
-    url: ${DB_URL}
-    username: ${DB_USERNAME}
-    password: ${DB_PASSWORD}
 
   jpa:
     hibernate:
@@ -28,20 +33,11 @@ spring:
         default_schema: downloader
 
   flyway:
-    url: ${DB_URL}
-    user: ${DB_FLYWAY_USERNAME}
-    password: ${DB_FLYWAY_PASSWORD}
     locations: classpath:db/migration
     default-schema: downloader
     schemas: downloader
 
 downloader:
-  s3:
-    endpoint: ${GARAGE_ENDPOINT}
-    bucket: ${GARAGE_BUCKET}
-    access-key: ${GARAGE_ACCESS_KEY}
-    secret-key: ${GARAGE_SECRET_KEY}
-    region: ${GARAGE_REGION:garage}
   ytdlp-path: /usr/local/bin/yt-dlp
   ytdlp-update-cron: "0 0 4 * * *"
   ffmpeg-path: /usr/bin/ffmpeg
