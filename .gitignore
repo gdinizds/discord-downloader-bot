@@ -33,11 +33,13 @@ out/
 /nbdist/
 /.nb-gradle/
 
-### VS Code ###
+### VS Code & AI Assistants ###
 .vscode/
+.claude/
 
 ### Secrets — nunca commitar ###
 .env.local
 k8s/secret.yaml
 cookies.txt
 k8s/secret-cookies.yaml
+/docs/

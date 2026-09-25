@@ -6,6 +6,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.VideoProbe;
+import dev.gdiniz.discorddownloaderbot.util.ProcessUtils;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.github.resilience4j.retry.annotation.Retry;
@@ -24,6 +25,7 @@ import java.util.List;
 public class YtDlpService {
 
     private static final Logger log = LoggerFactory.getLogger(YtDlpService.class);
+    private static final int MAX_LOG_LINES = 50;
 
     private final DownloaderProperties properties;
 
@@ -65,7 +67,7 @@ public class YtDlpService {
             String output;
             int exitCode;
             try {
-                output = new String(process.getInputStream().readAllBytes());
+                output = ProcessUtils.readProcessOutputBounded(process.getInputStream(), MAX_LOG_LINES);
                 exitCode = process.waitFor();
             } catch (InterruptedException e) {
                 process.destroyForcibly();
@@ -99,6 +101,7 @@ public class YtDlpService {
         var formatSelector = resolveFormatSelector(source.getFormatSelector(), request.qualidade());
         var cmd = new ArrayList<String>();
         cmd.add(properties.ytdlpPath());
+        cmd.add("--no-playlist");
         cmd.add("-f"); cmd.add(formatSelector);
         cmd.add("--print"); cmd.add("%(filesize)s");
         cmd.add("--print"); cmd.add("%(filesize_approx)s");
@@ -114,7 +117,7 @@ public class YtDlpService {
                     .start();
             String output;
             try {
-                output = new String(process.getInputStream().readAllBytes()).trim();
+                output = ProcessUtils.readProcessOutputBounded(process.getInputStream(), 10);
                 process.waitFor();
             } catch (InterruptedException e) {
                 process.destroyForcibly();
@@ -156,12 +159,19 @@ public class YtDlpService {
     private List<String> buildCommand(String url, String formatSelector, String[] extraArgs, String outputTemplate) {
         var cmd = new ArrayList<String>();
         cmd.add(properties.ytdlpPath());
+        cmd.add("--no-playlist");
+        cmd.add("--no-progress");
         cmd.add("-f");
         cmd.add(formatSelector);
         cmd.add("-o");
         cmd.add(outputTemplate);
         if (extraArgs != null) {
-            for (String arg : extraArgs) cmd.add(arg);
+            for (String arg : extraArgs) {
+                // Avoid duplicating flags if defined in extraArgs
+                if (!"--no-playlist".equals(arg) && !"--no-progress".equals(arg)) {
+                    cmd.add(arg);
+                }
+            }
         }
         cmd.add(url);
         return cmd;

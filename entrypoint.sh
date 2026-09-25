@@ -14,8 +14,14 @@ else
     echo "yt-dlp update failed, continuing with existing version: $(yt-dlp --version)"
 fi
 
-exec java \
-  -XX:+UseZGC \
-  -Xms256m -Xmx1g \
-  -XX:MaxDirectMemorySize=256m \
-  -jar app.jar
+if [ -f "./discord-downloader-bot" ]; then
+    echo "Starting GraalVM Native Image..."
+    exec ./discord-downloader-bot
+else
+    echo "Starting JVM..."
+    exec java \
+      -XX:+UseZGC \
+      -Xms256m -Xmx1g \
+      -XX:MaxDirectMemorySize=256m \
+      -jar app.jar
+fi

@@ -3,9 +3,9 @@ package dev.gdiniz.discorddownloaderbot.service;
 import dev.gdiniz.discorddownloaderbot.config.DownloaderProperties;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadJob;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadJobRepository;
-import dev.gdiniz.discorddownloaderbot.domain.GuildConfigRepository;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadSource;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadSourceRepository;
+import dev.gdiniz.discorddownloaderbot.domain.GuildConfig;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
@@ -13,8 +13,10 @@ import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
 import dev.gdiniz.discorddownloaderbot.kafka.ResponseProducer;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.opentelemetry.api.trace.Span;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.DisposableBean;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -23,13 +25,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @Service
-public class DownloadOrchestrator {
+public class DownloadOrchestrator implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(DownloadOrchestrator.class);
 
@@ -38,16 +43,18 @@ public class DownloadOrchestrator {
     private final S3UploadService s3UploadService;
     private final DownloadSourceRepository sourceRepository;
     private final DownloadJobRepository jobRepository;
-    private final GuildConfigRepository guildConfigRepository;
+    private final GuildConfigCache guildConfigCache;
     private final ResponseProducer responseProducer;
     private final DownloaderProperties properties;
     private final MeterRegistry meterRegistry;
     private final ScheduledExecutorService timeoutScheduler =
             Executors.newScheduledThreadPool(1, Thread.ofVirtual().name("download-timeout-", 0).factory());
 
+    private final Map<String, Optional<DownloadSource>> sourceCache = new ConcurrentHashMap<>();
+
     public DownloadOrchestrator(YtDlpService ytDlpService, FfmpegService ffmpegService,
                                  S3UploadService s3UploadService, DownloadSourceRepository sourceRepository,
-                                 DownloadJobRepository jobRepository, GuildConfigRepository guildConfigRepository,
+                                 DownloadJobRepository jobRepository, GuildConfigCache guildConfigCache,
                                  ResponseProducer responseProducer,
                                  DownloaderProperties properties, MeterRegistry meterRegistry) {
         this.ytDlpService = ytDlpService;
@@ -55,17 +62,28 @@ public class DownloadOrchestrator {
         this.s3UploadService = s3UploadService;
         this.sourceRepository = sourceRepository;
         this.jobRepository = jobRepository;
-        this.guildConfigRepository = guildConfigRepository;
+        this.guildConfigCache = guildConfigCache;
         this.responseProducer = responseProducer;
         this.properties = properties;
         this.meterRegistry = meterRegistry;
     }
 
+    @PostConstruct
+    public void init() {
+        cleanOrphanedTempDirs();
+    }
+
+    @Override
+    public void destroy() {
+        log.info("Shutting down DownloadOrchestrator timeout scheduler...");
+        timeoutScheduler.shutdownNow();
+    }
+
     public void process(DownloadRequest request) {
         var host = extractHost(request.url());
         boolean isInteraction = request.interactionToken() != null;
-        long maxFileBytes = guildConfigRepository.findById(request.guildId())
-                .map(c -> c.getMaxFileSizeBytes())
+        long maxFileBytes = guildConfigCache.get(request.guildId())
+                .map(GuildConfig::getMaxFileSizeBytes)
                 .orElse(properties.discordMaxFileBytes());
 
         var span = Span.current();
@@ -251,11 +269,14 @@ public class DownloadOrchestrator {
     }
 
     private DownloadSource resolveSource(String host) {
-        var found = sourceRepository.findByHostAndEnabledTrue(host);
-        if (found.isEmpty()) {
-            log.warn("No configured source for host '{}' — using generic yt-dlp fallback", host);
+        if (host == null || host.isBlank()) {
+            return DownloadSource.generic("unknown");
         }
-        return found.orElseGet(() -> DownloadSource.generic(host));
+        return sourceCache.computeIfAbsent(host, h -> sourceRepository.findByHostAndEnabledTrue(h))
+                .orElseGet(() -> {
+                    log.warn("No configured source for host '{}' — using generic yt-dlp fallback", host);
+                    return DownloadSource.generic(host);
+                });
     }
 
     private String extractHost(String url) {
@@ -269,15 +290,15 @@ public class DownloadOrchestrator {
         }
     }
 
-    private String friendlyHost(String host) {
-        return switch (host) {
-            case "youtube.com", "youtu.be"                           -> "YouTube";
-            case "twitter.com", "x.com"                              -> "X/Twitter";
-            case "instagram.com"                                      -> "Instagram";
-            case "tiktok.com", "vt.tiktok.com",
-                 "vm.tiktok.com", "m.tiktok.com"                     -> "TikTok";
-            default                                                   -> host;
-        };
+    private void cleanOrphanedTempDirs() {
+        var tmp = Path.of(properties.tmpDir());
+        if (!Files.exists(tmp)) return;
+        try (var stream = Files.list(tmp)) {
+            stream.filter(Files::isDirectory).forEach(this::cleanup);
+            log.info("Cleaned orphaned temporary download directories from: {}", tmp);
+        } catch (Exception e) {
+            log.warn("Could not clean orphaned temp directories: {}", e.getMessage());
+        }
     }
 
     private void cleanup(Path dir) {

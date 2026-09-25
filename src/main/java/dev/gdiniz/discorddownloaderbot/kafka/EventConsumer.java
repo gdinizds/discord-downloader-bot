@@ -6,26 +6,31 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.service.DownloadOrchestrator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 
 @Component
 public class EventConsumer {
 
     private static final Logger log = LoggerFactory.getLogger(EventConsumer.class);
-    private static final Executor EXECUTOR = Executors.newVirtualThreadPerTaskExecutor();
 
     private final DownloadOrchestrator orchestrator;
     private final ObjectMapper objectMapper;
+    private final Executor executor;
 
-    public EventConsumer(DownloadOrchestrator orchestrator, ObjectMapper objectMapper) {
+    @Autowired
+    public EventConsumer(DownloadOrchestrator orchestrator,
+                         ObjectMapper objectMapper,
+                         @Qualifier("downloadTaskExecutor") Executor executor) {
         this.orchestrator = orchestrator;
         this.objectMapper = objectMapper;
+        this.executor = executor;
     }
 
     @KafkaListener(
@@ -55,7 +60,7 @@ public class EventConsumer {
                     url,
                     event.extractQualidade()
             );
-            EXECUTOR.execute(() -> orchestrator.process(request));
+            executor.execute(() -> orchestrator.process(request));
         } catch (Exception e) {
             log.error("Failed to process interaction event", e);
         }
@@ -88,7 +93,7 @@ public class EventConsumer {
                     url,
                     "original"
             );
-            EXECUTOR.execute(() -> orchestrator.process(request));
+            executor.execute(() -> orchestrator.process(request));
         } catch (Exception e) {
             log.error("Failed to process message command event", e);
         }

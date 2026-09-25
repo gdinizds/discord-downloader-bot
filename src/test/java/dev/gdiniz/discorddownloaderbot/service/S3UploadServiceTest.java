@@ -41,7 +41,7 @@ class S3UploadServiceTest {
 
         var result = service.upload(Path.of("video.mp4"), "guild-1", "corr-1");
 
-        assertThat(result).isEqualTo("guild-1/corr-1/video.mp4");
+        assertThat(result).isEqualTo("guild-1/corr-1.mp4");
     }
 
     @Test

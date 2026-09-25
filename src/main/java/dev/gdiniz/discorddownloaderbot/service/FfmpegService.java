@@ -2,6 +2,7 @@ package dev.gdiniz.discorddownloaderbot.service;
 
 import dev.gdiniz.discorddownloaderbot.config.DownloaderProperties;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
+import dev.gdiniz.discorddownloaderbot.util.ProcessUtils;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
 import io.opentelemetry.api.trace.Span;
@@ -18,6 +19,7 @@ import java.util.List;
 public class FfmpegService {
 
     private static final Logger log = LoggerFactory.getLogger(FfmpegService.class);
+    private static final int MAX_LOG_LINES = 50;
 
     private static final long MIN_VIDEO_BITRATE_BPS = 150_000;
     private static final long AUDIO_BITRATE_BPS     = 128_000;
@@ -40,6 +42,9 @@ public class FfmpegService {
         try {
             var process = new ProcessBuilder(List.of(
                     properties.ffmpegPath(),
+                    "-nostats",
+                    "-loglevel", "error",
+                    "-threads", String.valueOf(properties.ffmpegThreads()),
                     "-i", input.toString(),
                     "-c:v", "libx264",
                     "-preset", "veryfast",
@@ -52,7 +57,7 @@ public class FfmpegService {
             String outputLog;
             int exitCode;
             try {
-                outputLog = new String(process.getInputStream().readAllBytes());
+                outputLog = ProcessUtils.readProcessOutputBounded(process.getInputStream(), MAX_LOG_LINES);
                 exitCode = process.waitFor();
             } catch (InterruptedException e) {
                 process.destroyForcibly();
@@ -62,7 +67,7 @@ public class FfmpegService {
 
             if (exitCode != 0) {
                 log.error("ffmpeg failed (exit {}): correlationId={}\n{}", exitCode, correlationId, outputLog);
-                throw new DownloadException("ffmpeg exited with code " + exitCode);
+                throw new DownloadException("ffmpeg exited with code " + exitCode + ": " + outputLog);
             }
 
             log.info("ffmpeg encode completed in {}ms: correlationId={}", System.currentTimeMillis() - start, correlationId);
@@ -97,6 +102,9 @@ public class FfmpegService {
         try {
             var process = new ProcessBuilder(List.of(
                     properties.ffmpegPath(),
+                    "-nostats",
+                    "-loglevel", "error",
+                    "-threads", String.valueOf(properties.ffmpegThreads()),
                     "-i", input.toString(),
                     "-c:v", "libx264",
                     "-preset", "veryfast",
@@ -112,7 +120,7 @@ public class FfmpegService {
             String outputLog;
             int exitCode;
             try {
-                outputLog = new String(process.getInputStream().readAllBytes());
+                outputLog = ProcessUtils.readProcessOutputBounded(process.getInputStream(), MAX_LOG_LINES);
                 exitCode = process.waitFor();
             } catch (InterruptedException e) {
                 process.destroyForcibly();
@@ -122,7 +130,7 @@ public class FfmpegService {
 
             if (exitCode != 0) {
                 log.error("ffmpeg size-encode failed (exit {}): correlationId={}\n{}", exitCode, correlationId, outputLog);
-                throw new DownloadException("ffmpeg size-encode exited with code " + exitCode);
+                throw new DownloadException("ffmpeg size-encode exited with code " + exitCode + ": " + outputLog);
             }
 
             long resultSize = Files.size(output);
@@ -160,7 +168,7 @@ public class FfmpegService {
                     input.toString()
             )).redirectErrorStream(false).start();
 
-            var out = new String(process.getInputStream().readAllBytes()).trim();
+            var out = ProcessUtils.readProcessOutputBounded(process.getInputStream(), 5);
             process.waitFor();
             return out.isBlank() ? -1 : Double.parseDouble(out);
         } catch (Exception e) {

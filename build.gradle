@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'org.springframework.boot' version '4.0.6'
     id 'io.spring.dependency-management' version '1.1.7'
+    id 'org.graalvm.buildtools.native' version '0.11.1'
 }
 
 group = 'dev.gdiniz'
@@ -55,11 +56,26 @@ dependencies {
 
     implementation platform('software.amazon.awssdk:bom:2.26.0')
     implementation 'software.amazon.awssdk:s3'
+    implementation 'software.amazon.awssdk:apache-client'
 
     testImplementation 'org.springframework.boot:spring-boot-starter-test'
     testImplementation 'org.springframework.kafka:spring-kafka-test'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
     testRuntimeOnly 'com.h2database:h2'
+}
+
+graalvmNative {
+    binaries {
+        main {
+            imageName = 'discord-downloader-bot'
+            mainClass = 'dev.gdiniz.discorddownloaderbot.DiscordDownloaderBotApplication'
+            buildArgs.addAll(
+                '--no-fallback',
+                '--enable-preview',
+                '-H:+ReportExceptionStackTraces'
+            )
+        }
+    }
 }
 
 tasks.named('test') {

@@ -6,7 +6,7 @@ metadata:
   labels:
     app: discord-downloader-bot
 spec:
-  replicas: 2
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -31,10 +31,6 @@ spec:
               url: "jdbc:postgresql://{{ .Data.data.host }}:{{ .Data.data.port }}/{{ .Data.data.dbname }}"
               username: "{{ .Data.data.username }}"
               password: "{{ .Data.data.password }}"
-            flyway:
-              url: "jdbc:postgresql://{{ .Data.data.host }}:{{ .Data.data.port }}/{{ .Data.data.dbname }}"
-              user: "{{ .Data.data.flyway_username }}"
-              password: "{{ .Data.data.flyway_password }}"
           {{- end -}}
         vault.hashicorp.com/agent-inject-secret-s3: "secret/discord-downloader-bot/s3"
         vault.hashicorp.com/agent-inject-file-s3: "s3.yaml"
@@ -44,9 +40,23 @@ spec:
             s3:
               endpoint: "{{ .Data.data.endpoint }}"
               bucket: "{{ .Data.data.bucket }}"
-              region: "{{ .Data.data.region }}"
               access-key: "{{ .Data.data.access_key_id }}"
               secret-key: "{{ .Data.data.secret_access_key }}"
+              region: "{{ .Data.data.region | default "garage" }}"
+          gateway:
+            garage:
+              endpoint: "{{ .Data.data.endpoint }}"
+              bucket: "{{ .Data.data.bucket }}"
+          GARAGE_ACCESS_KEY: "{{ .Data.data.access_key_id }}"
+          GARAGE_SECRET_KEY: "{{ .Data.data.secret_access_key }}"
+          {{- end -}}
+        vault.hashicorp.com/agent-inject-secret-discord: "secret/discord-downloader-bot/discord"
+        vault.hashicorp.com/agent-inject-file-discord: "discord.yaml"
+        vault.hashicorp.com/agent-inject-template-discord: |
+          {{- with secret "secret/discord-downloader-bot/discord" -}}
+          discord:
+            bot:
+              token: "{{ .Data.data.bot_token }}"
           {{- end -}}
     spec:
       terminationGracePeriodSeconds: 60
@@ -56,8 +66,8 @@ spec:
 
       containers:
         - name: discord-downloader-bot
-          image: ghcr.io/gdinizds/discord-downloader-bot:latest
-          imagePullPolicy: Always
+          image: ghcr.io/gdinizds/discord-downloader-bot:v1.0.0 # {"$imagepolicy": "flux-system:discord-downloader-bot"}
+          imagePullPolicy: IfNotPresent
           ports:
             - name: http
               containerPort: 8080
@@ -65,17 +75,17 @@ spec:
 
           env:
             - name: SPRING_CLOUD_CONSUL_HOST
-              value: "consul.consul.svc.cluster.local"
+              value: "consul-server.consul.svc.cluster.local"
             - name: SPRING_CLOUD_CONSUL_PORT
               value: "8500"
 
           resources:
             requests:
-              cpu: "500m"
-              memory: "512Mi"
+              cpu: 250m
+              memory: 256Mi
             limits:
-              cpu: "4"
-              memory: "2Gi"
+              cpu: "2"
+              memory: 2Gi
 
           volumeMounts:
             - name: tmp-downloads
@@ -90,7 +100,7 @@ spec:
             httpGet:
               path: /actuator/health/readiness
               port: http
-            initialDelaySeconds: 30
+            initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 3
 
@@ -98,9 +108,9 @@ spec:
             httpGet:
               path: /actuator/health/liveness
               port: http
-            initialDelaySeconds: 60
-            periodSeconds: 20
-            failureThreshold: 3
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 4
 
           startupProbe:
             httpGet:
@@ -118,3 +128,5 @@ spec:
         - name: ytdlp-cookies
           secret:
             secretName: ytdlp-cookies
+            optional: true
+      restartPolicy: Always

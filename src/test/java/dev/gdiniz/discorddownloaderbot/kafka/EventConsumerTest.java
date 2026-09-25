@@ -3,10 +3,10 @@ package dev.gdiniz.discorddownloaderbot.kafka;
 import tools.jackson.databind.ObjectMapper;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.service.DownloadOrchestrator;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -23,8 +23,12 @@ class EventConsumerTest {
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
 
-    @InjectMocks
     private EventConsumer consumer;
+
+    @BeforeEach
+    void setUp() {
+        consumer = new EventConsumer(orchestrator, objectMapper, Runnable::run);
+    }
 
     @Test
     void consumeInteraction_withDownloadCommand_dispatchesRequest() throws Exception {

@@ -2,11 +2,11 @@ spring:
   application:
     name: discord-downloader-bot
   config:
-    import: "optional:consul:,optional:file:/vault/secrets/db.yaml,optional:file:/vault/secrets/s3.yaml"
+    import: "optional:consul:,optional:file:/vault/secrets/db.yaml,optional:file:/vault/secrets/s3.yaml,optional:file:/vault/secrets/discord.yaml"
 
   cloud:
     consul:
-      host: ${SPRING_CLOUD_CONSUL_HOST:consul.consul.svc.cluster.local}
+      host: ${SPRING_CLOUD_CONSUL_HOST:consul-server.consul.svc.cluster.local}
       port: ${SPRING_CLOUD_CONSUL_PORT:8500}
       config:
         enabled: true
@@ -17,7 +17,17 @@ spring:
     virtual:
       enabled: true
 
+  datasource:
+    hikari:
+      maximum-pool-size: ${HIKARI_MAX_POOL_SIZE:30}
+      minimum-idle: ${HIKARI_MIN_IDLE:10}
+      idle-timeout: 60000
+      connection-timeout: ${HIKARI_CONNECTION_TIMEOUT:10000}
+      max-lifetime: 1800000
+      leak-detection-threshold: 20000
+
   kafka:
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:redpanda.redpanda.svc.cluster.local:9093}
     consumer:
       group-id: discord-downloader
       auto-offset-reset: earliest
@@ -31,6 +41,10 @@ spring:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         default_schema: downloader
+        jdbc:
+          batch_size: 25
+          order_inserts: true
+          order_updates: true
 
   flyway:
     locations: classpath:db/migration
@@ -38,9 +52,16 @@ spring:
     schemas: downloader
 
 downloader:
+  s3:
+    endpoint: ${downloader.s3.endpoint:${gateway.garage.endpoint:${GATEWAY_GARAGE_ENDPOINT:http://garage.garage.svc.cluster.local:3900}}}
+    bucket: ${downloader.s3.bucket:${gateway.garage.bucket:${GATEWAY_GARAGE_BUCKET:discord-gateway-attachments}}}
+    access-key: ${downloader.s3.access-key:${GARAGE_ACCESS_KEY:${gateway.garage.access-key:}}}
+    secret-key: ${downloader.s3.secret-key:${GARAGE_SECRET_KEY:${gateway.garage.secret-key:}}}
+    region: ${downloader.s3.region:${GARAGE_REGION:${gateway.garage.region:garage}}}
   ytdlp-path: /usr/local/bin/yt-dlp
   ytdlp-update-cron: "0 0 4 * * *"
   ffmpeg-path: /usr/bin/ffmpeg
+  ffmpeg-threads: ${FFMPEG_THREADS:2}
   tmp-dir: /tmp/discord-downloads
   discord-max-file-bytes: 26214400
   processing-timeout-seconds: 50
@@ -97,11 +118,11 @@ resilience4j:
   bulkhead:
     instances:
       ytdlpBulkhead:
-        maxConcurrentCalls: 5
-        maxWaitDuration: 10s
+        maxConcurrentCalls: ${BULKHEAD_YTDLP_MAX_CONCURRENT:15}
+        maxWaitDuration: ${BULKHEAD_YTDLP_MAX_WAIT:30s}
       ffmpegBulkhead:
-        maxConcurrentCalls: 3
-        maxWaitDuration: 10s
+        maxConcurrentCalls: ${BULKHEAD_FFMPEG_MAX_CONCURRENT:8}
+        maxWaitDuration: ${BULKHEAD_FFMPEG_MAX_WAIT:30s}
 
 management:
   endpoints:
