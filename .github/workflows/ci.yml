@@ -17,6 +17,9 @@ jobs:
           java-version: '25'
           cache: gradle
 
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
       - name: Run tests
         run: ./gradlew test --console=plain
 
