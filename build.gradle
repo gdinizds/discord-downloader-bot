@@ -70,9 +70,11 @@ graalvmNative {
             imageName = 'discord-downloader-bot'
             mainClass = 'dev.gdiniz.discorddownloaderbot.DiscordDownloaderBotApplication'
             buildArgs.addAll(
-                '--no-fallback',
-                '--enable-preview',
-                '-H:+ReportExceptionStackTraces'
+                    '--no-fallback',
+                    '--enable-preview',
+                    '-H:+ReportExceptionStackTraces',
+                    '-H:+UnlockExperimentalVMOptions',
+                    '-H:Preserve=package=org.flywaydb.*'
             )
         }
     }
