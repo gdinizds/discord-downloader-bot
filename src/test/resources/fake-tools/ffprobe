@@ -1,0 +1,9 @@
+#!/bin/sh
+for last in "$@"; do :; done
+case "$last" in
+  *h264*) printf 'h264,video\naac,audio\n' ;;
+  *vp9*) printf 'vp9,video\nopus,audio\n' ;;
+  *av1*) printf 'av1,video\naac,audio\n' ;;
+  *audioonly*) printf 'aac,audio\n' ;;
+  *) exit 1 ;;
+esac

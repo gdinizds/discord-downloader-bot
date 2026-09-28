@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+import json
+import os
+import sys
+import time
+
+args = sys.argv[1:]
+here = os.path.dirname(os.path.abspath(__file__))
+log_path = os.path.join(here, "calls.log")
+
+target = args[-1] if args else ""
+for i, a in enumerate(args):
+    if a == "--load-info-json" and i + 1 < len(args):
+        target = open(args[i + 1]).read()
+
+with open(log_path, "a") as log:
+    log.write(json.dumps(args) + "\n")
+
+if "--version" in args:
+    print("2099.01.01")
+    sys.exit(0)
+
+if "sleep" in target:
+    time.sleep(30)
+
+if "private" in target:
+    sys.stderr.write("ERROR: [youtube] abc: Private video. Sign in if you've been granted access\n")
+    sys.exit(1)
+
+if "broken" in target:
+    sys.stderr.write("ERROR: unable to download video data: HTTP Error 503: Service Unavailable\n")
+    sys.exit(1)
+
+if "--dump-single-json" in args:
+    if "noprobe" in target:
+        sys.exit(1)
+    print(json.dumps({
+        "title": "clip",
+        "webpage_url": target,
+        "filesize": None,
+        "filesize_approx": None,
+        "duration": 12.5,
+        "requested_formats": [{"filesize": 1000}, {"filesize_approx": 500}]
+    }))
+    sys.exit(0)
+
+template = args[args.index("-o") + 1]
+out = template.replace("%(title).150B", "clip").replace("%(ext)s", "mp4")
+os.makedirs(os.path.dirname(out), exist_ok=True)
+with open(out, "wb") as f:
+    f.write(b"\0" * 2048)
+with open(os.path.join(os.path.dirname(out), "leftover.mp4.part"), "wb") as f:
+    f.write(b"\0" * 8192)
+sys.exit(0)

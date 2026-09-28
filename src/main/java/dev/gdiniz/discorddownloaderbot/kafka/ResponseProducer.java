@@ -27,7 +27,13 @@ public class ResponseProducer {
     public void send(GatewayResponse response) {
         try {
             var json = objectMapper.writeValueAsString(response);
-            kafkaTemplate.send(topics.outboundResponses(), response.correlationId(), json);
+            kafkaTemplate.send(topics.outboundResponses(), response.correlationId(), json)
+                    .whenComplete((result, error) -> {
+                        if (error != null) {
+                            log.error("Response not delivered to Kafka: correlationId={} type={}",
+                                    response.correlationId(), response.responseType(), error);
+                        }
+                    });
             log.debug("Sent response: correlationId={} type={}", response.correlationId(), response.responseType());
         } catch (Exception e) {
             log.error("Failed to send response: correlationId={}", response.correlationId(), e);

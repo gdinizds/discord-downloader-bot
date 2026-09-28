@@ -4,6 +4,7 @@ import tools.jackson.databind.ObjectMapper;
 import dev.gdiniz.discorddownloaderbot.dto.DiscordEventPayload;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.service.DownloadOrchestrator;
+import dev.gdiniz.discorddownloaderbot.service.UrlPolicy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,6 +14,7 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
+import java.util.Locale;
 import java.util.concurrent.Executor;
 
 @Component
@@ -45,7 +47,7 @@ public class EventConsumer {
 
         try {
             var event = objectMapper.readValue(payload, DiscordEventPayload.class);
-            var url = event.extractUrl();
+            var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in interaction event: correlationId={}", event.correlationId());
                 return;
@@ -58,7 +60,7 @@ public class EventConsumer {
                     event.interactionToken(),
                     event.messageId(),
                     url,
-                    event.extractQualidade()
+                    normalizeQualidade(event.extractQualidade())
             );
             executor.execute(() -> orchestrator.process(request));
         } catch (Exception e) {
@@ -78,7 +80,7 @@ public class EventConsumer {
 
         try {
             var event = objectMapper.readValue(payload, DiscordEventPayload.class);
-            var url = event.extractUrl();
+            var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in message command: correlationId={}", event.correlationId());
                 return;
@@ -97,5 +99,15 @@ public class EventConsumer {
         } catch (Exception e) {
             log.error("Failed to process message command event", e);
         }
+    }
+
+    static String normalizeQualidade(String raw) {
+        if (raw == null) return "original";
+        var value = raw.strip().toLowerCase(Locale.ROOT);
+        if (value.endsWith("p")) value = value.substring(0, value.length() - 1);
+        return switch (value) {
+            case "1080", "720", "480", "360" -> value + "p";
+            default -> "original";
+        };
     }
 }

@@ -4,8 +4,10 @@ import dev.gdiniz.discorddownloaderbot.domain.DownloadJob;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadSource;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadStatus;
 import dev.gdiniz.discorddownloaderbot.domain.GuildConfig;
+import dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException;
 import dev.gdiniz.discorddownloaderbot.dto.DiscordEventPayload;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
+import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
@@ -39,6 +41,8 @@ import org.springframework.scheduling.annotation.EnableScheduling;
         DownloadRequest.class,
         DownloadResult.class,
         DownloadException.class,
+        ContentUnavailableException.class,
+        DownloadInterruptedException.class,
         DownloadJob.class,
         DownloadSource.class,
         GuildConfig.class,

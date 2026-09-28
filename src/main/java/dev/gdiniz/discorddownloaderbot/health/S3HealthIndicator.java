@@ -7,11 +7,14 @@ import org.springframework.stereotype.Component;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.model.HeadBucketRequest;
 
+import java.time.Duration;
+
 @Component("s3")
 public class S3HealthIndicator implements HealthIndicator {
 
     private final S3Client s3Client;
     private final DownloaderProperties properties;
+    private final CachedHealth cache = new CachedHealth(Duration.ofSeconds(30));
 
     public S3HealthIndicator(S3Client s3Client, DownloaderProperties properties) {
         this.s3Client = s3Client;
@@ -20,6 +23,10 @@ public class S3HealthIndicator implements HealthIndicator {
 
     @Override
     public Health health() {
+        return cache.get(this::check);
+    }
+
+    private Health check() {
         try {
             s3Client.headBucket(HeadBucketRequest.builder()
                     .bucket(properties.s3().bucket())
