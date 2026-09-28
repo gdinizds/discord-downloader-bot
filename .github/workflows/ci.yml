@@ -44,6 +44,9 @@ jobs:
                           msg = (node.get("message") or node.text or "").strip().splitlines()
                           first = msg[0][:300] if msg else tag
                           print(f"::error title={case.get('classname')}.{case.get('name')}::{first}")
+                          causes = [l.strip() for l in (node.text or "").splitlines() if l.strip().startswith("Caused by")]
+                          for cause in causes[-3:]:
+                              print(f"::error title={case.get('name')} cause::{cause[:400]}")
           EOF
 
       - name: Test summary

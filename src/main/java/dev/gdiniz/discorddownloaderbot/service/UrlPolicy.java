@@ -1,5 +1,6 @@
 package dev.gdiniz.discorddownloaderbot.service;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.net.InetAddress;
@@ -20,6 +21,7 @@ public class UrlPolicy {
 
     private final Resolver resolver;
 
+    @Autowired
     public UrlPolicy() {
         this(InetAddress::getAllByName);
     }
