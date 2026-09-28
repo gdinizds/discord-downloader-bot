@@ -228,14 +228,21 @@ public class YtDlpService {
         throw new DownloadException("yt-dlp service temporarily unavailable", t);
     }
 
-    private String resolveFormatSelector(String tableSelector, String qualidade) {
+    String resolveFormatSelector(String tableSelector, String qualidade) {
         return switch (qualidade) {
-            case "1080p" -> "bestvideo[height<=1080][ext=mp4]+bestaudio/best[height<=1080]";
-            case "720p"  -> "bestvideo[height<=720][ext=mp4]+bestaudio/best[height<=720]";
-            case "480p"  -> "bestvideo[height<=480][ext=mp4]+bestaudio/best[height<=480]";
-            case "360p"  -> "bestvideo[height<=360][ext=mp4]+bestaudio/best[height<=360]";
+            case "1080p" -> h264Selector(1080);
+            case "720p"  -> h264Selector(720);
+            case "480p"  -> h264Selector(480);
+            case "360p"  -> h264Selector(360);
             default      -> tableSelector;
         };
+    }
+
+    static String h264Selector(int height) {
+        return ("bestvideo[vcodec^=avc1][height<=%1$d]+bestaudio[ext=m4a]"
+                + "/best[vcodec^=avc1][height<=%1$d]"
+                + "/bestvideo[height<=%1$d][ext=mp4]+bestaudio"
+                + "/best[height<=%1$d]").formatted(height);
     }
 
     static Path findDownloadedFile(Path outputDir) throws IOException {
