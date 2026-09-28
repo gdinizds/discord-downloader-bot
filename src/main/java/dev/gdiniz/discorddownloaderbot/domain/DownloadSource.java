@@ -10,6 +10,8 @@ import java.time.OffsetDateTime;
 @Table(name = "download_sources", schema = "downloader")
 public class DownloadSource {
 
+    public static final String GENERIC_FORMAT_SELECTOR = "best[vcodec^=avc1]/best[vcodec^=h264]/best[ext=mp4]/best";
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -49,7 +51,7 @@ public class DownloadSource {
     public static DownloadSource generic(String host) {
         var s = new DownloadSource();
         s.host = host;
-        s.formatSelector = "best[ext=mp4]/best";
+        s.formatSelector = GENERIC_FORMAT_SELECTOR;
         s.extraArgs = new String[]{"--no-playlist"};
         s.enabled = true;
         return s;

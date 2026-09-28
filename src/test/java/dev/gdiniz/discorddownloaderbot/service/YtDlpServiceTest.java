@@ -137,4 +137,18 @@ class YtDlpServiceTest {
         return new DownloadRequest(correlationId, "guild-1", "channel-1", "user-1",
                 "token-1", "msg-1", url, "original");
     }
+
+    @Test
+    void qualitySelectorsPreferH264BeforeFallingBack() {
+        var selector = service.resolveFormatSelector("table", "720p");
+
+        assertThat(selector).startsWith("bestvideo[vcodec^=avc1][height<=720]+bestaudio[ext=m4a]");
+        assertThat(selector).endsWith("/best[height<=720]");
+        assertThat(service.resolveFormatSelector("table", "original")).isEqualTo("table");
+    }
+
+    @Test
+    void genericSourcePrefersH264() {
+        assertThat(DownloadSource.generic("example.com").getFormatSelector()).startsWith("best[vcodec^=avc1]");
+    }
 }
