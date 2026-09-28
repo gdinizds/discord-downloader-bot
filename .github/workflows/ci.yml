@@ -2,16 +2,20 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ['**']
   pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '25'
@@ -21,11 +25,54 @@ jobs:
         run: chmod +x gradlew
 
       - name: Run tests
-        run: ./gradlew test --console=plain
+        shell: bash
+        run: ./gradlew test --console=plain 2>&1 | tee build-output.log
+
+      - name: Annotate failures
+        if: failure()
+        shell: bash
+        run: |
+          grep -E "error:|warning: \[|FAILED|What went wrong" -A2 build-output.log | head -40 | while IFS= read -r line; do echo "::error::${line}"; done || true
+          python3 - <<'EOF'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob("build/test-results/test/*.xml"):
+              suite = ET.parse(path).getroot()
+              for case in suite.iter("testcase"):
+                  for tag in ("failure", "error"):
+                      node = case.find(tag)
+                      if node is not None:
+                          msg = (node.get("message") or node.text or "").strip().splitlines()
+                          first = msg[0][:300] if msg else tag
+                          print(f"::error title={case.get('classname')}.{case.get('name')}::{first}")
+                          causes = [l.strip() for l in (node.text or "").splitlines() if l.strip().startswith("Caused by")]
+                          for cause in causes[-3:]:
+                              print(f"::error title={case.get('name')} cause::{cause[:400]}")
+          EOF
+
+      - name: Test summary
+        if: always()
+        shell: bash
+        run: |
+          python3 - <<'EOF' | tee -a "$GITHUB_STEP_SUMMARY"
+          import glob, xml.etree.ElementTree as ET
+          total = skipped = failed = 0
+          skipped_suites = []
+          for path in glob.glob("build/test-results/test/*.xml"):
+              s = ET.parse(path).getroot()
+              t, sk = int(s.get("tests", 0)), int(s.get("skipped", 0))
+              total += t; skipped += sk
+              failed += int(s.get("failures", 0)) + int(s.get("errors", 0))
+              if t and sk == t:
+                  skipped_suites.append(s.get("name").rsplit(".", 1)[-1])
+          print(f"tests={total} failed={failed} skipped={skipped}")
+          if skipped_suites:
+              print("fully skipped: " + ", ".join(sorted(skipped_suites)))
+          EOF
+          echo "::notice title=Tests::$(tail -n 2 "$GITHUB_STEP_SUMMARY" | tr '\n' ' ')"
 
       - name: Publish test report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: test-results
           path: build/reports/tests/test

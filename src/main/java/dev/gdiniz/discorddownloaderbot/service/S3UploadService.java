@@ -55,6 +55,7 @@ public class S3UploadService {
     }
 
     private String s3Fallback(Path filePath, String guildId, String correlationId, Throwable t) {
+        if (t instanceof DownloadException downloadException) throw downloadException;
         log.error("S3 circuit breaker open: correlationId={}", correlationId, t);
         throw new DownloadException("S3 service temporarily unavailable", t);
     }

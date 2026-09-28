@@ -81,11 +81,19 @@ resilience4j:
         failureRateThreshold: 50
         waitDurationInOpenState: 30s
         permittedNumberOfCallsInHalfOpenState: 3
+        ignoreExceptions:
+          - dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException
+          - dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException
+          - io.github.resilience4j.bulkhead.BulkheadFullException
       ffmpeg:
         slidingWindowSize: 10
         failureRateThreshold: 50
         waitDurationInOpenState: 30s
         permittedNumberOfCallsInHalfOpenState: 3
+        ignoreExceptions:
+          - dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException
+          - dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException
+          - io.github.resilience4j.bulkhead.BulkheadFullException
       s3Upload:
         slidingWindowSize: 10
         failureRateThreshold: 50
@@ -104,6 +112,10 @@ resilience4j:
         waitDuration: 2s
         enableExponentialBackoff: true
         exponentialBackoffMultiplier: 2
+        ignoreExceptions:
+          - dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException
+          - dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException
+          - io.github.resilience4j.bulkhead.BulkheadFullException
       s3Retry:
         maxAttempts: 3
         waitDuration: 1s

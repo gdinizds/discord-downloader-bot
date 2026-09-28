@@ -18,7 +18,7 @@ public class YtDlpUpdater {
         try {
             var process = new ProcessBuilder(
                     "pip3", "install", "--no-cache-dir", "--break-system-packages", "--quiet",
-                    "-U", "yt-dlp[default]")
+                    "-U", "yt-dlp[default,curl-cffi]")
                     .redirectErrorStream(true)
                     .start();
             String output = new String(process.getInputStream().readAllBytes());

@@ -31,8 +31,8 @@ public record DiscordEventPayload(
     public String extractUrl() {
         if (rawPayload == null || rawPayload.args() == null) return null;
         return switch (rawPayload.args()) {
-            case Map<?, ?> map -> (String) map.get("link");
-            case List<?> list when !list.isEmpty() -> (String) list.get(0);
+            case Map<?, ?> map -> map.get("link") instanceof String link ? link : null;
+            case List<?> list when !list.isEmpty() -> list.getFirst() instanceof String first ? first : null;
             default -> null;
         };
     }
@@ -40,7 +40,7 @@ public record DiscordEventPayload(
     public String extractQualidade() {
         if (rawPayload == null || rawPayload.args() == null) return "original";
         return switch (rawPayload.args()) {
-            case Map<?, ?> map -> map.containsKey("qualidade") ? (String) map.get("qualidade") : "original";
+            case Map<?, ?> map -> map.get("qualidade") instanceof String q ? q : "original";
             default -> "original";
         };
     }
