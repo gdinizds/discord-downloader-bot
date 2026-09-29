@@ -6,15 +6,18 @@ import dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
+import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
 import dev.gdiniz.discorddownloaderbot.dto.VideoProbe;
 import dev.gdiniz.discorddownloaderbot.testsupport.FakeTools;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.test.util.ReflectionTestUtils;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -150,5 +153,47 @@ class YtDlpServiceTest {
     @Test
     void genericSourcePrefersH264() {
         assertThat(DownloadSource.generic("example.com").getFormatSelector()).startsWith("best[vcodec^=avc1]");
+    }
+
+    @Test
+    void rateLimitIsReportedAsBlockedAndStopsAtTheProbe() {
+        assertThatThrownBy(() -> service.probe(request("corr-rl", "https://instagram.com/reel/ratelimit"), source))
+                .isInstanceOf(SourceBlockedException.class)
+                .isNotInstanceOf(ContentUnavailableException.class);
+        assertThat(FakeTools.calls(tools)).hasSize(1);
+    }
+
+    @Test
+    void privateContentWinsOverBlockedMarkers() {
+        var failure = YtDlpService.classify("x", "ERROR: Private video. Sign in to confirm you've been granted access");
+
+        assertThat(failure).isInstanceOf(ContentUnavailableException.class);
+    }
+
+    @Test
+    void eachJobGetsItsOwnCookieCopyAndTheSharedFileIsNeverWritten() throws Exception {
+        var shared = Files.writeString(tmp.resolve("cookies.txt"), "# Netscape HTTP Cookie File\n");
+        var igSource = DownloadSource.generic("instagram.com");
+        ReflectionTestUtils.setField(igSource, "extraArgs",
+                new String[]{"--no-playlist", "--cookies", shared.toString()});
+        var request = request("corr-cookies", "https://instagram.com/reel/ok");
+
+        var probe = service.probe(request, igSource);
+        var result = service.execute(request, igSource, probe);
+
+        var jobCookies = tmp.resolve("work").resolve("corr-cookies").resolve(".auth").resolve("cookies.txt");
+        assertThat(Files.readString(shared)).isEqualTo("# Netscape HTTP Cookie File\n");
+        assertThat(jobCookies).exists();
+        assertThat(FakeTools.calls(tools)).allSatisfy(call ->
+                assertThat(call).contains(jobCookies.toString()).doesNotContain("\"" + shared + "\""));
+        assertThat(result.filePath().getFileName().toString()).isEqualTo("clip.mp4");
+    }
+
+    @Test
+    void missingCookieFileIsPassedThroughUnchanged() {
+        var cmd = new ArrayList<String>();
+        YtDlpService.addExtraArgs(cmd, new String[]{"--cookies", "/nope/cookies.txt", "--no-progress"}, tmp);
+
+        assertThat(cmd).containsExactly("--cookies", "/nope/cookies.txt");
     }
 }

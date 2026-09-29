@@ -83,6 +83,7 @@ resilience4j:
         permittedNumberOfCallsInHalfOpenState: 3
         ignoreExceptions:
           - dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException
+          - dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException
           - dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException
           - io.github.resilience4j.bulkhead.BulkheadFullException
       ffmpeg:
@@ -114,6 +115,7 @@ resilience4j:
         exponentialBackoffMultiplier: 2
         ignoreExceptions:
           - dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException
+          - dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException
           - dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException
           - io.github.resilience4j.bulkhead.BulkheadFullException
       s3Retry:

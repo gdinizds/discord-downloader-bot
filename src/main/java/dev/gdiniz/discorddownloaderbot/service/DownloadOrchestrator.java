@@ -8,6 +8,7 @@ import dev.gdiniz.discorddownloaderbot.domain.DownloadSourceRepository;
 import dev.gdiniz.discorddownloaderbot.domain.GuildConfig;
 import dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
+import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
 import dev.gdiniz.discorddownloaderbot.kafka.ResponseProducer;
@@ -44,6 +45,7 @@ public class DownloadOrchestrator implements DisposableBean {
     static final String MSG_IN_PROGRESS = "⏳ Download em andamento...";
     static final String MSG_INVALID_URL = "❌ Link inválido. Envie um link público começando com http:// ou https://.";
     static final String MSG_UNAVAILABLE = "❌ O conteúdo não está disponível (privado, removido ou link não suportado).";
+    static final String MSG_BLOCKED = "❌ A plataforma limitou o acesso no momento (rate limit ou login exigido). Tente novamente mais tarde.";
     static final String MSG_GENERIC_FAILURE = "❌ Não foi possível baixar o conteúdo. Verifique se o link é válido e tente novamente.";
     static final String MSG_UNEXPECTED = "❌ Ocorreu um erro inesperado ao processar o download. Tente novamente em instantes.";
 
@@ -299,6 +301,8 @@ public class DownloadOrchestrator implements DisposableBean {
                 log.warn("Processing timed out: correlationId={}", request.correlationId());
             } else if (e instanceof ContentUnavailableException) {
                 log.info("Content unavailable: correlationId={} detail={}", request.correlationId(), e.getMessage());
+            } else if (e instanceof SourceBlockedException) {
+                log.warn("Source blocked the download: correlationId={} host={} detail={}", request.correlationId(), host, e.getMessage());
             } else {
                 log.error("Download failed: correlationId={}", request.correlationId(), e);
             }
@@ -327,6 +331,7 @@ public class DownloadOrchestrator implements DisposableBean {
                     .formatted(properties.processingTimeoutSeconds());
         }
         if (e instanceof ContentUnavailableException) return MSG_UNAVAILABLE;
+        if (e instanceof SourceBlockedException) return MSG_BLOCKED;
         if (e instanceof DownloadException) return MSG_GENERIC_FAILURE;
         return MSG_UNEXPECTED;
     }
@@ -334,6 +339,7 @@ public class DownloadOrchestrator implements DisposableBean {
     private static String failureReason(Exception e, boolean timedOut) {
         if (timedOut) return "Timeout";
         if (e instanceof ContentUnavailableException) return "ContentUnavailable";
+        if (e instanceof SourceBlockedException) return "SourceBlocked";
         return e.getClass().getSimpleName();
     }
 
