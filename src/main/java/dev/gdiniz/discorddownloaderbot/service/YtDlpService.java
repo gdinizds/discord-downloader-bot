@@ -7,6 +7,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
+import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
 import dev.gdiniz.discorddownloaderbot.dto.VideoProbe;
 import dev.gdiniz.discorddownloaderbot.util.ProcessRunner;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
@@ -22,6 +23,7 @@ import tools.jackson.databind.json.JsonMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -38,6 +40,8 @@ public class YtDlpService {
     private static final String INFO_JSON = "probe.info.json";
     private static final JsonMapper JSON = JsonMapper.builder().build();
     private static final Set<String> MANAGED_FLAGS = Set.of("--no-playlist", "--no-progress");
+    private static final Set<String> COOKIE_FLAGS = Set.of("--cookies");
+    private static final String COOKIE_DIR = ".auth";
     private static final List<String> UNAVAILABLE_MARKERS = List.of(
             "unsupported url",
             "video unavailable",
@@ -50,6 +54,18 @@ public class YtDlpService {
             "no video could be found",
             "there is no video in this post",
             "is not a valid url");
+    private static final List<String> BLOCKED_MARKERS = List.of(
+            "rate-limit reached",
+            "rate limit reached",
+            "login required",
+            "log in to",
+            "sign in to confirm",
+            "http error 429",
+            "http error 401",
+            "too many requests",
+            "checkpoint_required",
+            "cookies are no longer valid",
+            "account has been flagged");
 
     private final DownloaderProperties properties;
 
@@ -81,7 +97,7 @@ public class YtDlpService {
         command.add(formatSelector);
         command.add("-o");
         command.add(outputTemplate);
-        addExtraArgs(command, source.getExtraArgs());
+        addExtraArgs(command, source.getExtraArgs(), outputDir);
         if (probe != null && probe.hasInfoJson() && Files.exists(probe.infoJson())) {
             command.add("--load-info-json");
             command.add(probe.infoJson().toString());
@@ -138,17 +154,25 @@ public class YtDlpService {
         cmd.add("-f");
         cmd.add(formatSelector);
         cmd.add("--dump-single-json");
-        addExtraArgs(cmd, source.getExtraArgs());
+        try {
+            Files.createDirectories(outputDir);
+        } catch (IOException e) {
+            log.warn("yt-dlp probe skipped, could not create work dir: correlationId={} error={}",
+                    request.correlationId(), e.getMessage());
+            return VideoProbe.unknown();
+        }
+        addExtraArgs(cmd, source.getExtraArgs(), outputDir);
         cmd.add("--");
         cmd.add(request.url());
 
         try {
-            Files.createDirectories(outputDir);
             var result = ProcessRunner.runWithStdoutTo(cmd, infoJson, timeout(), MAX_LOG_LINES);
             if (!result.succeeded() || Files.size(infoJson) == 0) {
                 Files.deleteIfExists(infoJson);
                 var failure = classify("yt-dlp probe exited with code " + result.exitCode(), result.output());
-                if (failure instanceof ContentUnavailableException unavailable) throw unavailable;
+                if (failure instanceof ContentUnavailableException || failure instanceof SourceBlockedException) {
+                    throw failure;
+                }
                 log.warn("yt-dlp probe failed, proceeding with download: correlationId={} exit={}",
                         request.correlationId(), result.exitCode());
                 return VideoProbe.unknown();
@@ -162,7 +186,7 @@ public class YtDlpService {
             log.info("yt-dlp probe: correlationId={} fileSizeBytes={} durationSeconds={}",
                     request.correlationId(), fileSize, (int) duration);
             return new VideoProbe(fileSize, duration, infoJson);
-        } catch (ContentUnavailableException e) {
+        } catch (ContentUnavailableException | SourceBlockedException e) {
             throw e;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -200,6 +224,9 @@ public class YtDlpService {
         for (String marker : UNAVAILABLE_MARKERS) {
             if (lower.contains(marker)) return new ContentUnavailableException(message + ": " + marker);
         }
+        for (String marker : BLOCKED_MARKERS) {
+            if (lower.contains(marker)) return new SourceBlockedException(message + ": " + marker);
+        }
         return new DownloadException(message + ": " + output);
     }
 
@@ -215,10 +242,31 @@ public class YtDlpService {
         return Path.of(properties.tmpDir(), request.correlationId());
     }
 
-    private static void addExtraArgs(List<String> cmd, String[] extraArgs) {
+    static void addExtraArgs(List<String> cmd, String[] extraArgs, Path workDir) {
         if (extraArgs == null) return;
-        for (String arg : extraArgs) {
-            if (!MANAGED_FLAGS.contains(arg)) cmd.add(arg);
+        for (int i = 0; i < extraArgs.length; i++) {
+            String arg = extraArgs[i];
+            if (MANAGED_FLAGS.contains(arg)) continue;
+            cmd.add(arg);
+            if (COOKIE_FLAGS.contains(arg) && i + 1 < extraArgs.length) {
+                cmd.add(privateCookieCopy(Path.of(extraArgs[++i]), workDir).toString());
+            }
+        }
+    }
+
+    static Path privateCookieCopy(Path shared, Path workDir) {
+        var target = workDir.resolve(COOKIE_DIR).resolve(shared.getFileName());
+        if (Files.exists(target)) return target;
+        if (!Files.isRegularFile(shared)) {
+            log.warn("Cookie file not found, passing it through unchanged: {}", shared);
+            return shared;
+        }
+        try {
+            Files.createDirectories(target.getParent());
+            Files.copy(shared, target, StandardCopyOption.REPLACE_EXISTING);
+            return target;
+        } catch (IOException e) {
+            throw new DownloadException("Failed to prepare private cookie file", e);
         }
     }
 
