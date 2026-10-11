@@ -1,198 +1,279 @@
-# discord-downloader-bot
+[![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk)](https://openjdk.org/)
+[![GraalVM](https://img.shields.io/badge/GraalVM-JDK%2025-red?logo=graalvm)](https://www.graalvm.org/)
+[![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.6-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
+[![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka%20%2F%20Redpanda-Event--Driven-black?logo=apachekafka)](https://kafka.apache.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-blue?logo=postgresql)](https://www.postgresql.org/)
+[![Resilience4j](https://img.shields.io/badge/Resilience4j-2.2.0-yellow)](https://resilience4j.readme.io/)
+[![yt-dlp](https://img.shields.io/badge/yt--dlp-2026-blueviolet?logo=youtube)](https://github.com/yt-dlp/yt-dlp)
+[![ffmpeg](https://img.shields.io/badge/FFmpeg-libx264-green?logo=ffmpeg)](https://ffmpeg.org/)
 
-Microserviço de alta performance em **Java 25** e **Spring Boot 4** projetado para processar downloads de mídia (vídeos, áudios, imagens, galerias e carrosséis) sob demanda a partir do ecossistema Discord.
+O **discord-downloader-bot** é um microserviço de alta performance, assíncrono e orientado a eventos projetado para processar downloads e transcodificação sob demanda de mídias (vídeos, áudios, imagens, galerias e carrosséis) a partir do ecossistema Discord. Desenvolvido sobre o **Java 25 com GraalVM** e **Spring Boot 4**, ele adota concorrência massiva baseada em **Virtual Threads (Project Loom)** e comunicação desacoplada via **Kafka / Redpanda**.
 
-O serviço opera de forma **100% assíncrona e orientada a eventos** via **Kafka / Redpanda**, totalmente desacoplado da Discord Gateway API (não há SDK ou bot token no classpath deste serviço). O processamento faz uso de **Virtual Threads (Project Loom)**, permitindo alta concorrência de I/O e processos externos sem bloqueio de carrier threads do sistema operacional.
+O bot conta com um **pipeline triplo de extração com fallback automático** (`yt-dlp` ➔ `gallery-dl` ➔ `Direct HTTP Streaming`), transcodificação adaptativa inteligente e compressão orientada a tamanho alvo via **FFmpeg**, isolamento de credenciais por job, proteção corporativa **anti-SSRF** e resiliência multicamadas com **Resilience4j**.
 
 ---
 
-## 📐 Blueprint da Arquitetura
-
-### 1. Visão Geral da Arquitetura do Sistema
+O sistema opera de forma totalmente desacoplada do Discord: um gateway externo escuta a API de Gateway do Discord e publica eventos brutos no Kafka. O `discord-downloader-bot` consome os eventos, processa o download e o tratamento de mídia em background e publica as respostas prontas com links indexados do **S3 (Garage Storage)** nos tópicos de saída.
 
 ```mermaid
-flowchart TB
-    subgraph Discord["Discord Ecosystem"]
-        User(["👤 Usuário Discord"])
-        GatewaySvc["🌐 Discord Gateway Service\n(Gateway WebSocket + REST API)"]
+graph TD
+    subgraph Discord Infrastructure
+        DG[Discord Gateway API]
+        U[Usuários / Canais Discord]
     end
 
-    subgraph Messaging["Message Broker (Kafka / Redpanda)"]
-        TopicInteraction["📥 discord.events.interaction.command\n(/download)"]
-        TopicMessage["📥 discord.events.message.command\n(.baixar)"]
-        TopicGuild["📥 discord.events.guild.updated"]
-        TopicCommands["📤 discord.gateway.commands"]
-        TopicResponses["📤 discord.gateway.responses"]
+    subgraph Messaging & Event Broker
+        KP_IN_INT[Kafka: discord.events.interaction.command]
+        KP_IN_MSG[Kafka: discord.events.message.command]
+        KP_IN_GLD[Kafka: discord.events.guild.updated]
+        KP_OUT_RSP[Kafka: discord.gateway.responses]
+        KP_OUT_CMD[Kafka: discord.gateway.commands]
     end
 
-    subgraph Service["discord-downloader-bot"]
-        direction TB
-        CmdReg["CommandRegistrar\n(Registra comandos no boot)"]
-        Consumers["Kafka Event Consumers\n(Virtual Threads)"]
-        Orchestrator["DownloadOrchestrator\n(Controle de Ciclo de Vida e Regras)"]
-        Policy["UrlPolicy\n(Validação e Proteção Anti-SSRF)"]
-        Cache["GuildConfigCache\n(Limites de upload por Servidor)"]
-        
-        subgraph Pipeline["Pipeline de Extração com Fallback"]
-            YtDlp["YtDlpService\n(Probe, h264 preference, .auth isolado)"]
-            GalleryDl["GalleryDlService\n(Carrosséis, álbuns e posts sociais)"]
-            DirectDl["DirectMediaDownloadService\n(HTTP Streaming de mídia direta)"]
+    subgraph "Core: discord-downloader-bot (Spring Boot 4 + GraalVM 25)"
+        subgraph Inbound Adapters
+            EC[EventConsumer - Virtual Threads]
+            GEC[GuildEventConsumer]
+            CR[CommandRegistrar]
         end
 
-        Ffmpeg["FfmpegService\n(Transcoding libx264, target-bitrate compression)"]
-        S3Uploader["S3UploadService\n(AWS SDK v2 / Garage Storage)"]
-        Sweeper["StaleJobSweeper & YtDlpUpdater\n(@Scheduled background tasks)"]
+        subgraph Core Orchestration & Services
+            DO[DownloadOrchestrator]
+            UP[UrlPolicy - Anti-SSRF]
+            GCC[GuildConfigCache]
+            SCHED[StaleJobSweeper & YtDlpUpdater]
+        end
+
+        subgraph Extraction & Processing Pipeline
+            YTS[YtDlpService - Probe & H.264]
+            GLS[GalleryDlService - Galerias & Metadados]
+            DMS[DirectMediaDownloadService - HTTP Stream]
+            FFS[FfmpegService - Transcode & EncodeToSize]
+            S3S[S3UploadService - AWS SDK v2]
+        end
+
+        subgraph Outbound Adapters & Repositories
+            RP[ResponseProducer]
+            JOB_REPO[DownloadJobRepository]
+            SRC_REPO[DownloadSourceRepository]
+            CFG_REPO[GuildConfigRepository]
+        end
     end
 
-    subgraph Storage["Storage & Persistência"]
-        Postgres[("🐘 PostgreSQL\nSchema: downloader\n(download_jobs, download_sources)")]
-        S3Store[("🪣 Object Storage S3\n(Garage S3 / AWS S3)")]
+    subgraph External Services & Storage
+        PG[(PostgreSQL - Schema downloader)]
+        S3[(Garage S3 / AWS S3 Storage)]
+        CLI_YT[yt-dlp + curl-cffi + Deno]
+        CLI_GL[gallery-dl CLI]
+        CLI_FF[FFmpeg / FFprobe]
     end
 
-    %% Fluxos de Registro e Entrada
-    CmdReg -->|Registra comandos no startup| TopicCommands
-    TopicCommands --> GatewaySvc
-    User -->|Executa comando| GatewaySvc
-    GatewaySvc -->|Produz comando slash| TopicInteraction
-    GatewaySvc -->|Produz dot command| TopicMessage
-    GatewaySvc -->|Atualização de guild| TopicGuild
+    %% Inbound flow
+    U -->|Comandos /download ou .baixar| DG
+    DG -->|Encaminha interação| KP_IN_INT
+    DG -->|Encaminha mensagem| KP_IN_MSG
+    DG -->|Atualização de guild| KP_IN_GLD
 
-    TopicInteraction --> Consumers
-    TopicMessage --> Consumers
-    TopicGuild --> Cache
+    KP_IN_INT --> EC
+    KP_IN_MSG --> EC
+    KP_IN_GLD --> GEC
+    GEC --> GCC
 
-    %% Fluxos internos
-    Consumers --> Policy
-    Policy --> Orchestrator
-    Orchestrator <--> Cache
-    Orchestrator <--> Postgres
-    Orchestrator --> Pipeline
-    Pipeline --> Ffmpeg
-    Ffmpeg --> S3Uploader
-    S3Uploader --> S3Store
-    Orchestrator -->|Publica resultado final / erro| TopicResponses
-    TopicResponses --> GatewaySvc
-    GatewaySvc -->|Envia anexo / mensagem| User
+    %% Processing flow
+    EC --> UP
+    UP --> DO
+    DO <--> GCC
+    DO <--> SRC_REPO
+    DO <--> JOB_REPO
+    JOB_REPO --> PG
+    SRC_REPO --> PG
+    CFG_REPO --> PG
+
+    %% Pipeline flow
+    DO --> YTS
+    YTS --> CLI_YT
+    YTS -.->|Fallback em falha| GLS
+    GLS --> CLI_GL
+    GLS -.->|Fallback em falha| DMS
+    
+    YTS --> FFS
+    GLS --> FFS
+    DMS --> FFS
+    FFS --> CLI_FF
+
+    FFS --> S3S
+    S3S --> S3
+
+    %% Outbound flow
+    DO --> RP
+    RP --> KP_OUT_RSP
+    CR --> KP_OUT_CMD
+    KP_OUT_RSP --> DG
+    KP_OUT_CMD --> DG
+    DG -->|Entrega anexo/resposta| U
 ```
 
 ---
 
-### 2. Fluxo Detalhado de Processamento & Pipeline de Fallback
+## ⚡ Fluxo de Execução Ponta a Ponta
+
+Cada solicitação de download segue um pipeline rigoroso de validação, feedback instantâneo, extração com fallback, transcodificação adaptativa e entrega estruturada:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant K as Kafka / Redpanda
-    participant C as EventConsumer
-    participant O as DownloadOrchestrator
-    participant UP as UrlPolicy
+    actor User as Usuário (Discord)
+    participant GW as Discord Gateway
+    participant Kafka as Redpanda / Kafka
+    participant Bot as EventConsumer (Virtual Thread)
+    participant Policy as UrlPolicy (Anti-SSRF)
+    participant Orch as DownloadOrchestrator
     participant DB as PostgreSQL
-    participant YT as YtDlpService
-    participant GL as GalleryDlService
-    participant DI as DirectMediaDownloadService
-    participant FF as FfmpegService
-    participant S3 as S3UploadService
-    participant R as ResponseProducer
+    participant Downloader as Pipeline (yt-dlp / gallery-dl / Direct)
+    participant FFmpeg as FfmpegService
+    participant S3 as Garage S3 Storage
 
-    K->>C: Evento de comando (/download ou .baixar)
-    C->>UP: Normaliza e valida URL
-    alt URL Inválida ou IP Interno (Anti-SSRF)
-        UP-->>C: Rejeitado
-        C->>R: Resposta de erro imediato
-    else URL Válida
-        C->>O: Dispara processamento em Virtual Thread dedicada
+    User->>GW: Comando (/download link: <url> ou .baixar <url>)
+    GW->>Kafka: Publica evento (discord.events.interaction/message)
+    Kafka->>Bot: Consome evento via Virtual Thread dedicada
+    
+    rect rgb(240, 248, 255)
+    Note over Bot,Policy: 1. Validação & Proteção de Entrada
+    Bot->>Policy: Normaliza URL e verifica políticas Anti-SSRF
+    alt URL Inválida ou IP Privado/Interno
+        Policy-->>Bot: REJECTED (host interno, porta não permitida, malformado)
+        Bot->>Kafka: Publica erro imediato no tópico de respostas
+    end
+    Bot->>Orch: Submete DownloadRequest sanitizado
     end
 
-    O->>DB: Cria DownloadJob com status PENDING
-    O->>R: Envia resposta provisória ("Download em andamento...")
-    O->>DB: Consulta configurações da fonte (download_sources)
+    rect rgb(255, 250, 240)
+    Note over Orch,GW: 2. Feedback Imediato & Validação de Quota
+    Orch->>DB: Registra DownloadJob (status: PENDING)
+    Orch->>Kafka: Publica resposta provisória ("⏳ Download em andamento...")
+    Kafka->>GW: Atualiza chat do Discord com feedback visual
+    Orch->>Orch: Obtém limite em bytes da guilda (GuildConfigCache)
+    end
 
-    Note over O,YT: 1ª Tentativa: yt-dlp com Probe Prévio
-    O->>YT: Executa probe (estimativa de tamanho e duração)
-    alt Tamanho / Duração Incomprimível para o limite do servidor
-        O->>R: Rejeita antes do download ("Conteúdo excede limite...")
-        O->>DB: Atualiza job para FAILED
-    else Viável ou desconhecido
-        YT->>YT: Cria cópia isolada de cookies (.auth)
-        opt Falha com erro não definitivo
-            YT-->>O: DownloadException
-            Note over O,GL: 2ª Tentativa (Fallback): gallery-dl
-            O->>GL: Executa gallery-dl (extração de imagens/vídeos/metadados)
-            opt Falha com erro não definitivo
-                GL-->>O: Falha
-                Note over O,DI: 3ª Tentativa (Fallback): Download Direto
-                O->>DI: Streaming HTTP (mídias com extensão direta)
+    rect rgb(245, 255, 245)
+    Note over Orch,Downloader: 3. Pipeline Triplo de Extração com Fallback
+    Orch->>Downloader: Executa Probe no yt-dlp (estimativa de tamanho e duração)
+    alt Tamanho/Duração excede limite e não é comprimível
+        Orch->>Kafka: Publica erro amigável de tamanho excedido
+        Orch->>DB: Atualiza job para FAILED
+    else Viável para download
+        Downloader->>Downloader: Cria cópia isolada de cookies (.auth) no workspace
+        opt Tentativa 1: yt-dlp falha (e não é bloqueio permanente)
+            Downloader->>Downloader: Tentativa 2: gallery-dl (carrosséis, posts sociais)
+            opt Tentativa 2: gallery-dl falha
+                Downloader->>Downloader: Tentativa 3: DirectMediaDownloadService (streaming HTTP direto)
             end
         end
     end
-
-    Note over O,FF: Tratamento de Mídia & Compressão
-    loop Para cada arquivo extraído (máx. 10 anexos por mensagem)
-        alt É Vídeo e precisa de transcodificação (não h264/avc1)
-            O->>FF: Transcodifica para H.264/AAC
-        end
-        alt Arquivo excede limite em bytes da Guild
-            O->>FF: Compressão orientada a tamanho (bitrate calculado)
-        end
-        O->>S3: Upload do arquivo final para o S3/Garage
-        S3-->>O: Retorna chave e URL pública
+    Downloader-->>Orch: Retorna DownloadResult (arquivos baixados + metadados)
     end
 
-    O->>R: Publica GatewayResponse com anexos e título no Kafka
-    O->>DB: Atualiza DownloadJob para DONE (tamanho total, s3_keys)
-    O->>O: Remove diretório de trabalho temporário (/tmp/discord-downloads/{correlationId})
+    rect rgb(255, 245, 245)
+    Note over Orch,FFmpeg: 4. Tratamento Inteligente de Mídia
+    loop Para cada arquivo extraído (máximo 10 anexos por mensagem)
+        alt É vídeo e necessita transcodificação (codec diferente de H.264/AVC1)
+            Orch->>FFmpeg: Transcodifica vídeo para H.264/AAC
+        end
+        alt Arquivo excede o limite máximo da guilda
+            Orch->>FFmpeg: Compressão orientada a tamanho alvo (target bitrate calculado)
+        end
+        Orch->>S3: Upload do anexo final indexado
+        S3-->>Orch: Retorna chave e URL do anexo
+    end
+    end
+
+    rect rgb(250, 240, 255)
+    Note over Orch,Kafka: 5. Entrega Final & Higienização do Workspace
+    Orch->>DB: Atualiza job para DONE (tamanho total em bytes e chaves S3)
+    Orch->>Kafka: Publica GatewayResponse final (título + anexos indexados)
+    Kafka->>GW: Edita mensagem no Discord e anexa as mídias baixadas
+    GW->>User: Exibe vídeo/galeria com player nativo no Discord
+    Orch->>Orch: Remove diretório de trabalho temporário (/tmp/discord-downloads/{correlationId})
+    end
 ```
 
 ---
 
-## ✨ Funcionalidades e Alterações Recentes
+## 🛠️ Pipeline de Extração e Ferramentas
 
-### 🔄 Pipeline Triplo de Download com Fallback em Cadeia
-1. **yt-dlp**: Download prioritário de vídeos de plataformas de streaming (YouTube, TikTok, Instagram, Twitter/X, Reddit, etc.) com probe inicial de metadados e seleção otimizada de formato H.264.
-2. **gallery-dl**: Fallback automático caso o `yt-dlp` falhe, especializado em galerias, posts de redes sociais com imagens, carrosséis do Instagram e múltiplos anexos do Twitter/X, extraindo título e descrição originais via JSON de metadados.
-3. **DirectMediaDownloadService**: Fallback secundário para URLs de mídia direta (extensões de imagens `.jpg, .png, .webp, .gif`, áudios `.mp3, .ogg, .flac` e vídeos `.mp4, .mkv, .mov`), realizando streaming HTTP nativo via `java.net.http.HttpClient` com aborto preventivo por excesso de tamanho.
+O microserviço combina múltiplos utilitários especializados com mecanismos de fallback ordenados para maximizar a taxa de sucesso de download:
 
-### 🖼️ Suporte a Múltiplos Arquivos e Galerias
-- Suporte nativo para posts contendo múltiplas mídias (carrosséis do Instagram e galerias do Twitter/X).
-- O `DownloadResult` manipula coleções de arquivos (`allFiles()`).
-- O sistema limita inteligentemente a entrega a até **10 arquivos por mensagem** (limite estrito da API do Discord) e realiza o upload indexado de cada mídia no bucket S3.
-
-### 🍪 Isolamento de Cookies por Job (`.auth`)
-- Para evitar condições de corrida (*race conditions*) e corrupção quando o `yt-dlp` reescreve sessões ou cookies durante chamadas simultâneas, cada job cria uma cópia privada e isolada do arquivo de cookies dentro de `/tmp/discord-downloads/{correlationId}/.auth/`. O arquivo mestre compartilhado permanece estritamente protegido e intacto.
-
-### 🛡️ Classificação Refinada de Erros e Proteção de Circuit Breakers
-- **`SourceBlockedException`**: Captura respostas de rate limit (HTTP 429), exigência de login e desafios de bot (Cloudflare/Checkpoint). Configurado no Resilience4j como exceção ignorada para não gerar retentativas inúteis quando a plataforma estiver bloqueando ativamente a requisição.
-- **`ContentUnavailableException`**: Captura mídias removidas, privadas ou inexistentes (HTTP 404/410), fornecendo mensagem amigável ao usuário sem degradar o circuit breaker.
-- **`DownloadInterruptedException` / Timeout**: Timeout de processamento (padrão de 240s) controlado por `ScheduledExecutorService` em virtual threads com interrupção e limpeza imediata dos processos CLI.
-
-### ⚡ Otimização de Formatos H.264 (Zero Re-encode)
-- Migrações Flyway atualizadas (`V8__prefer_h264_formats.sql` e `V9__support_all_media_types.sql`) instruem o `yt-dlp` a preferir codecs `avc1/h264` nativos de servidores remotos, permitindo pular totalmente a transcodificação de CPU via FFmpeg na maioria dos downloads.
-
-### 🔒 Proteção Avançada Anti-SSRF (`UrlPolicy`)
-- Validação estrita de esquemas permitidos (`http`, `https`).
-- Sanitização de spoilers (`||url||`) e formatações do Discord (`<url>`).
-- Resolução e validação de endereços IP para barrar acessos a redes internas, loopback (`127.0.0.1`), endereços locais (`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`), CGNAT (`100.64.0.0/10`) e metadados de cloud providers (`169.254.169.254`).
-
-### 🧹 Limpeza Automática & Manutenção Contínua
-- **`StaleJobSweeper`**: Varredura agendada no boot e a cada 10 minutos para marcar como `FAILED` jobs órfãos que foram interrompidos por reinicialização do pod/container.
-- **`YtDlpUpdater`**: Cron diário (04:00 AM) para atualizar automaticamente as ferramentas CLI (`yt-dlp[default,curl-cffi]` e `gallery-dl`) contra quebras de API das plataformas externas.
+| Ferramenta / Serviço | Especialidade | Mecanismo & Otimizações | Resiliência & Tratamento |
+|---|---|---|---|
+| **`YtDlpService`** | Vídeos de plataformas de streaming (YouTube, TikTok, Twitter/X, Instagram, Reddit, etc.) | - **Pre-probe** de duração e tamanho sem download prévio<br>- Preferência explícita por formatos `avc1/h264` (elimina re-encode)<br>- Isolamento de cookies privados em `.auth`<br>- Suporte a Deno para desafios JS | **CircuitBreaker** (30s) + **Bulkhead** (15 chamadas) + **Retry** (2x com backoff exp). Ignora `SourceBlockedException` e `ContentUnavailableException` |
+| **`GalleryDlService`** | Carrosséis de fotos/vídeos, álbuns e posts em redes sociais | - Extração de múltiplos arquivos por post<br>- Extração de metadados JSON (título e descrição originais)<br>- Cópia privada de cookies por job | **CircuitBreaker** (30s) + **Bulkhead** (15 chamadas) + **Retry** (2x). Acionado automaticamente em caso de falha do yt-dlp |
+| **`DirectMediaDownloadService`** | Mídias com links diretos (`.mp4`, `.mp3`, `.png`, `.jpg`, `.webp`, `.gif`, etc.) | - Streaming HTTP nativo com `java.net.http.HttpClient`<br>- Validação de cabeçalhos `Content-Length`<br>- Interrupção preventiva caso exceda a quota máxima | Timeout configurável por job, proteção anti-SSRF e sem dependência de processos externos |
+| **`FfmpegService`** | Transcodificação, compressão inteligente e detecção de mídia | - Transcodificação para H.264 / AAC com preset `veryfast`<br>- Cálculo matemático de taxa de bits (`targetVideoBitrate`) para caber na quota do servidor (`encodeToSize`)<br>- Detecção precisa de imagens/áudios para evitar transcode indevido | **CircuitBreaker** (30s) + **Bulkhead** (8 chamadas simultâneas de CPU) |
+| **`S3UploadService`** | Armazenamento de alta performance e disponibilidade | - Upload via AWS SDK v2 para Garage S3 / AWS S3<br>- Chaves estruturadas por Guild e Correlation ID<br>- URLs públicas geradas para entrega no Discord | **CircuitBreaker** (60s) + **Retry** (3x com backoff exponencial) |
 
 ---
 
-## 🛠️ Tecnologias e Stack
+## 🛡️ Segurança Corporativa e Proteção Anti-SSRF (`UrlPolicy`)
 
-| Camada | Tecnologia |
-|---|---|
-| **Linguagem & Runtime** | Java 25 (LTS) com Virtual Threads habilitadas, GraalVM JDK 25 |
-| **Framework Base** | Spring Boot 4.0.6 (Spring Data JPA, Spring Kafka, Actuator) |
-| **Mensageria** | Apache Kafka / Redpanda (`spring-kafka` com `VirtualThreadTaskExecutor`) |
-| **Banco de Dados** | PostgreSQL 16+ com migrações gerenciadas pelo Flyway |
-| **Storage de Mídia** | AWS SDK v2 para Java (`software.amazon.awssdk:s3`), compatível com Garage S3 e AWS S3 |
-| **Extração de Mídia** | `yt-dlp` (com `curl-cffi` e `deno`), `gallery-dl`, `DirectMediaDownloadService` |
-| **Processamento de Mídia** | `ffmpeg` / `ffprobe` (via `ProcessRunner` customizado) |
-| **Resiliência** | Resilience4j (Circuit Breakers, Retries exponenciais, Bulkheads) |
-| **Observabilidade** | Micrometer, Prometheus, OpenTelemetry (Tracing distribuído OTLP) |
-| **Configuração & Segredos** | Spring Cloud Consul Config e suporte a segredos via arquivos montados (HashiCorp Vault) |
+Ao receber URLs submetidas por usuários do Discord, o bot aplica validação preventiva contra **Server-Side Request Forgery (SSRF)** e ataques de injeção de argumentos:
+
+1. **Validação e Resolução Estrita de IPs (`UrlPolicy.isInternal`)**:
+   - Resolução DNS inspecionada antes de delegar a qualquer processo ou HTTP client.
+   - Bloqueio imediato de endereços:
+     - **Loopback**: `127.0.0.0/8`, `::1`
+     - **Redes Privadas RFC 1918**: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
+     - **Link-Local & Cloud Metadata**: `169.254.0.0/16` (bloqueia acesso a endpoints de metadados como AWS/GCP `169.254.169.254`), `fe80::/10`
+     - **Carrier-Grade NAT (CGNAT)**: `100.64.0.0/10`
+     - **Unique-Local IPv6 & Multicast**: `fc00::/7`, `224.0.0.0/4`, `ff00::/8`
+2. **Proteção contra Injeção de Argumentos de CLI**:
+   - Rejeição imediata de URLs iniciando com traço (`-`), impedindo injeção de parâmetros em binários CLI (`yt-dlp` e `gallery-dl`).
+3. **Restrição Estrita de Esquemas e Credenciais**:
+   - Permite unicamente os esquemas `http` e `https`. Credenciais embutidas na URL (`user:pass@host`) são terminantemente recusadas.
+4. **Sanitização de Formatações Discord**:
+   - Remove automaticamente delimitadores de spoiler (`||url||`) e formatações de suppress-embed (`<url>`) comuns no Discord.
+
+---
+
+## 🔄 Resiliência e Tolerância a Falhas
+
+- **Classificação Refinada de Exceções**:
+  - `SourceBlockedException`: Disparada ao detectar rate limits (HTTP 429), captchas e exigência de login. Declarada como *ignored* no Resilience4j para evitar retentativas fúteis e não degradar o circuito do serviço quando a plataforma externa estiver bloqueando requisições.
+  - `ContentUnavailableException`: Identifica vídeos privados, removidos ou páginas inexistentes (HTTP 404/410), notificando o usuário amigavelmente sem contabilizar como falha de infraestrutura.
+- **Isolamento de Cookies por Workspace (`.auth`)**:
+  - Arquivos de sessão compartilhados nunca são acessados em modo de escrita simultânea; cada processo trabalha em uma cópia privada isolada.
+- **Controle de Timeout Atômico**:
+  - `ScheduledExecutorService` configurado com Virtual Threads interrompe a thread de trabalho e encerra processos CLI caso excedam `downloader.processing-timeout-seconds` (padrão 240s), garantindo limpeza imediata do disco temporário.
+- **Expurgo Automático de Jobs Órfãos (`StaleJobSweeper`)**:
+  - Varredura agendada no boot e a cada 10 minutos que marca jobs interrompidos por reinicializações de container como `FAILED`.
+- **Drenagem Graciosa no Desligamento (Graceful Shutdown)**:
+  - O `DownloadOrchestrator` implementa `DisposableBean` com trava `drainLock`, aguardando a finalização dos downloads em trânsito antes de encerrar o processo.
+
+---
+
+## ⚡ Runtime de Alta Performance com GraalVM e Java 25
+
+O serviço é compilado e executado sobre o **Oracle GraalVM JDK 25**, aproveitando as mais recentes otimizações da JVM para containers de alto throughput:
+
+```dockerfile
+ARG GRAALVM_IMAGE=container-registry.oracle.com/graalvm/jdk:25
+```
+
+- **Generational ZGC (`-XX:+UseZGC`)**: Coletor de lixo ultrarrápido com pausas garantidas abaixo de 1 milissegundo, eliminando congelamentos durante processamento intensivo de I/O.
+- **Compilador GraalVM JIT (`-XX:+EnableJVMCI -XX:+UseJVMCICompiler`)**: Otimizações avançadas de compilação JIT de alto rendimento com inlining agressivo.
+- **Compact Object Headers (`-XX:+UseCompactObjectHeaders`)**: Redução substancial de footprint de memória em objetos Java 25.
+- **Virtual Threads (Project Loom)**: Ativadas globalmente (`spring.threads.virtual.enabled: true`), permitindo que chamadas síncronas de subprocessos (`ProcessRunner.waitFor()`) e transferências S3 escalem centenas de jobs simultâneos sem sobrecarregar threads do SO.
+- **Atualização Automática de Ferramentas CLI**: O `YtDlpUpdater` roda diariamente via cron (`0 0 4 * * *`) executando atualização in-place de `yt-dlp` e `gallery-dl` via `pip3`, mantendo paridade com mudanças constantes nas APIs das plataformas de streaming.
+
+---
+
+## 📋 Comandos Disponíveis no Discord
+
+| Comando | Tipo | Visibilidade | Descrição |
+|---|---|---|---|
+| `/download link: <url> [qualidade]` | Slash Command | Pública | Baixa mídias de qualquer plataforma com opção de qualidade (`original`, `1080p`, `720p`, `480p`, `360p`). |
+| `.baixar <url>` | Mensagem / Prefixo | Pública | Comando rápido via chat de texto (qualidade `original` padrão). |
+
+Os comandos são anunciados e registrados automaticamente no cluster Discord durante a inicialização da aplicação pelo `CommandRegistrar`.
 
 ---
 
@@ -202,151 +283,109 @@ sequenceDiagram
 
 | Tópico | Payload / Formato | Descrição |
 |---|---|---|
-| `discord.events.interaction.command` | JSON (`DiscordEventPayload`) com header `command-name: download` | Comandos de barra (`/download link: <url> qualidade: [1080p, 720p...]`) |
-| `discord.events.message.command` | JSON (`DiscordEventPayload`) com header `command-name: baixar` | Comandos por texto (`.baixar <url>`) |
-| `discord.events.guild.updated` | JSON (`GuildUpdatedEvent`) | Atualização em tempo real de limites de arquivo por servidor Discord |
+| `discord.events.interaction.command` | JSON (`DiscordEventPayload`) | Consome comandos slash (`/download`). |
+| `discord.events.message.command` | JSON (`DiscordEventPayload`) | Consome comandos de prefixo (`.baixar`). |
+| `discord.events.guild.updated` | JSON (`GuildUpdatedEvent`) | Consome atualizações em tempo real de limites de upload dos servidores. |
 
 ### Tópicos Outbound (Publicados)
 
 | Tópico | Payload / Formato | Descrição |
 |---|---|---|
-| `discord.gateway.responses` | JSON (`GatewayResponse`) | Mensagens de progresso, mensagens de erro e entrega final das mídias com links S3 e nomes de arquivo |
-| `discord.gateway.commands` | JSON | Registro automático de comandos de barra e prefixo disparado no startup do microserviço |
-
----
-
-## 🛡️ Resiliência (Resilience4j)
-
-Configuração ajustada e isolada por operação em `application.yaml`:
-
-| Instância | Tipo | Configurações Principais | Exceções Ignoradas |
-|---|---|---|---|
-| `ytdlp` | Circuit Breaker | Window: 10, Falha: 50%, Espera Aberto: 30s | `ContentUnavailableException`, `SourceBlockedException`, `DownloadInterruptedException`, `BulkheadFullException` |
-| `ytdlpRetry` | Retry | Max: 2 tentativas, Espera: 2s (backoff x2) | As mesmas acima |
-| `ytdlpBulkhead` | Bulkhead | Máx Concorrentes: 15, Max Wait: 30s | — |
-| `gallerydl` | Circuit Breaker | Window: 10, Falha: 50%, Espera Aberto: 30s | As mesmas de indisponibilidade e bloqueio |
-| `gallerydlRetry` | Retry | Max: 2 tentativas, Espera: 2s (backoff x2) | As mesmas de indisponibilidade e bloqueio |
-| `gallerydlBulkhead`| Bulkhead | Máx Concorrentes: 15, Max Wait: 30s | — |
-| `ffmpeg` | Circuit Breaker | Window: 10, Falha: 50%, Espera Aberto: 30s | `ContentUnavailableException`, `DownloadInterruptedException` |
-| `ffmpegBulkhead` | Bulkhead | Máx Concorrentes: 8, Max Wait: 30s | — |
-| `s3Upload` | Circuit Breaker | Window: 10, Falha: 50%, Espera Aberto: 60s | — |
-| `s3Retry` | Retry | Max: 3 tentativas, Espera: 1s (backoff x2) | — |
+| `discord.gateway.responses` | JSON (`GatewayResponse`) | Publica respostas de status provisório, mensagens de erro e anexos finais. |
+| `discord.gateway.commands` | JSON | Publica a especificação dos comandos no startup para registro dinâmico no Gateway. |
 
 ---
 
 ## 📊 Métricas e Observabilidade
 
-Métricas expostas no endpoint do Actuator:
-```
-GET /actuator/prometheus
-```
+O serviço expõe métricas completas no padrão Prometheus e traces via OpenTelemetry:
 
-### Métricas de Negócio Registradas
+- **Endpoint Prometheus**: `GET /actuator/prometheus`
+- **Distributed Tracing**: Exportação de spans OTLP com amostragem total (`probability: 1.0`) para tracing ponta a ponta.
+- **Health Indicators**: `GET /actuator/health` com verificações ativas de `ffmpeg`, `ytDlp`, `s3` e probes de liveness/readiness.
 
-- `downloader.job.in_flight` *(Gauge)*: Quantidade de jobs de download sendo processados simultaneamente.
-- `downloader.job.started` *(Counter, tags: `source_host`, `qualidade`)*: Disparos de jobs iniciados.
-- `downloader.job.completed` *(Counter, tags: `source_host`, `qualidade`)*: Downloads concluídos com sucesso.
-- `downloader.job.failed` *(Counter, tags: `source_host`, `qualidade`, `reason`)*: Falhas classificadas por causa (`too_large`, `too_long`, `SourceBlockedException`, `ContentUnavailableException`, etc.).
-- `downloader.job.duration` *(Timer, tags: `source_host`, `qualidade`)*: Tempo total de processamento desde a recepção até o upload no S3.
-- `downloader.file.size` *(DistributionSummary, tags: `source_host`)*: Distribuição do tamanho em bytes dos arquivos enviados.
-- `downloader.job.rejected` *(Counter, tag: `reason`)*: URLs inválidas ou barradas por SSRF.
-- `downloader.job.duplicate` *(Counter)*: Mensagens duplicadas com mesmo `correlation_id`.
-- `downloader.job.stale` *(Counter)*: Jobs órfãos expurgados pelo `StaleJobSweeper`.
+### Métricas de Negócio Registradas (Micrometer)
 
-### Health Indicators Customizados
-
-Expostos em `/actuator/health`:
-- `ffmpeg`: Executa `ffmpeg -version` com validação de binário funcional.
-- `ytDlp`: Executa `yt-dlp --version` e expõe a versão instalada.
-- `s3`: Executa `headBucket` no bucket configurado do S3/Garage.
+| Métrica | Tipo | Tags | Descrição |
+|---|---|---|---|
+| `downloader.job.in_flight` | Gauge | — | Quantidade de downloads sendo processados em tempo real. |
+| `downloader.job.started` | Counter | `source_host`, `qualidade` | Total de jobs iniciados. |
+| `downloader.job.completed` | Counter | `source_host`, `qualidade` | Total de jobs concluídos com sucesso. |
+| `downloader.job.failed` | Counter | `source_host`, `qualidade`, `reason` | Total de jobs que falharam por motivo catalogado. |
+| `downloader.job.duration` | Timer | `source_host`, `qualidade` | Duração ponta a ponta do processamento. |
+| `downloader.file.size` | DistributionSummary | `source_host` | Distribuição de tamanho em bytes dos arquivos enviados. |
+| `downloader.job.rejected` | Counter | `reason` | Solicitações rejeitadas por URL inválida ou SSRF. |
+| `downloader.job.duplicate` | Counter | — | Eventos duplicados ignorados por idempotência. |
+| `downloader.job.stale` | Counter | — | Jobs órfãos expurgados após reinicializações. |
 
 ---
 
-## 🗄️ Modelo de Dados (Flyway Migrations)
+## ⚙️ Variáveis de Ambiente e Configurações
 
-O banco de dados PostgreSQL utiliza o schema `downloader`:
-
-### Tabela `download_sources`
-Registra regras de extração por domínio/host, permitindo ajustes dinâmicos sem novo deploy:
-- `host`: Ex. `youtube.com`, `tiktok.com`, `instagram.com`, `x.com`.
-- `format_selector`: Expressão de formato para o `yt-dlp`.
-- `extra_args`: Argumentos extras de linha de comando (ex.: `--cookies`, `--merge-output-format`).
-- `requires_auth` & `enabled`: Flags de controle.
-
-### Tabela `download_jobs`
-Histórico de execuções para auditoria e rastreamento:
-- `correlation_id`: Identificador único da mensagem/interação.
-- `guild_id`, `user_id`, `url`, `source_host`, `qualidade`.
-- `status`: `PENDING`, `DOWNLOADING`, `ENCODING`, `UPLOADING`, `DONE`, `FAILED`.
-- `file_size_bytes`, `s3_key`, `error_message`, `created_at`, `completed_at`.
-
-### Tabela `guild_configs`
-Configurações personalizadas por servidor Discord:
-- `guild_id`: Identificador da guilda.
-- `max_file_size_bytes`: Limite máximo em bytes para uploads (respeita planos Discord Nitro / Boost do servidor).
+| Variável | Padrão | Descrição |
+|---|---|---|
+| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | `redpanda.redpanda.svc.cluster.local:9093` | Endereço dos brokers Kafka / Redpanda. |
+| `SPRING_DATASOURCE_URL` | — | JDBC URL do PostgreSQL (`jdbc:postgresql://host:5432/db`). |
+| `SPRING_DATASOURCE_USERNAME` | — | Usuário do banco de dados PostgreSQL. |
+| `SPRING_DATASOURCE_PASSWORD` | — | Senha do banco de dados PostgreSQL. |
+| `GATEWAY_GARAGE_ENDPOINT` | `http://garage.garage.svc.cluster.local:3900` | Endpoint do serviço de Object Storage S3 / Garage. |
+| `GATEWAY_GARAGE_BUCKET` | `discord-gateway-attachments` | Nome do bucket S3 utilizado para os uploads. |
+| `GARAGE_ACCESS_KEY` / `GARAGE_SECRET_KEY` | — | Credenciais de acesso ao bucket S3. |
+| `GARAGE_REGION` | `garage` | Região configurada no S3. |
+| `FFMPEG_THREADS` | `2` | Número de threads alocadas para transcodificação de CPU. |
+| `HIKARI_MAX_POOL_SIZE` | `30` | Número máximo de conexões no pool HikariCP. |
+| `BULKHEAD_YTDLP_MAX_CONCURRENT` | `15` | Limite de chamadas simultâneas ao yt-dlp. |
+| `BULKHEAD_GALLERYDL_MAX_CONCURRENT` | `15` | Limite de chamadas simultâneas ao gallery-dl. |
+| `BULKHEAD_FFMPEG_MAX_CONCURRENT` | `8` | Limite de codificações simultâneas de FFmpeg. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318/v1/traces` | Endpoint do coletor OpenTelemetry (OTLP). |
+| `SPRING_CLOUD_CONSUL_HOST` | `consul-server.consul.svc.cluster.local` | Host do HashiCorp Consul para externalização de configurações. |
 
 ---
 
 ## 🚀 Como Executar
 
 ### Pré-requisitos
-- **Java 25** (Oracle GraalVM JDK 25 ou Eclipse Temurin 25)
-- **Docker** ou **Podman**
-- Binários CLI instalados localmente se for executar fora de container:
+- **JDK 25** (Oracle GraalVM JDK 25 ou Eclipse Temurin 25)
+- **Docker** / **Podman**
+- Binários CLI instalados localmente para execuções fora de container:
   - `ffmpeg` e `ffprobe`
   - `yt-dlp` (com suporte a `curl-cffi`)
   - `gallery-dl`
-  - `deno` (recomendado para desafios JavaScript do YouTube)
+  - `deno` (recomendado para resolução de desafios JavaScript)
 
-### Variáveis de Ambiente Principais
-
-| Variável | Valor Padrão | Descrição |
-|---|---|---|
-| `SPRING_KAFKA_BOOTSTRAP_SERVERS` | `redpanda.redpanda.svc.cluster.local:9093` | Endereço dos brokers Kafka / Redpanda |
-| `SPRING_DATASOURCE_URL` | — | JDBC URL do PostgreSQL (`jdbc:postgresql://...`) |
-| `SPRING_DATASOURCE_USERNAME` | — | Usuário do banco de dados |
-| `SPRING_DATASOURCE_PASSWORD` | — | Senha do banco de dados |
-| `GATEWAY_GARAGE_ENDPOINT` | `http://garage.garage.svc.cluster.local:3900` | Endpoint do S3 / Garage |
-| `GATEWAY_GARAGE_BUCKET` | `discord-gateway-attachments` | Nome do bucket S3 |
-| `GARAGE_ACCESS_KEY` | — | Access Key do S3 |
-| `GARAGE_SECRET_KEY` | — | Secret Key do S3 |
-| `FFMPEG_THREADS` | `2` | Número de threads para transcodificação de CPU |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318/v1/traces` | Endpoint do coletor OpenTelemetry |
-
-### Compilação e Testes
+### Build e Testes
 
 ```bash
-# Rodar suíte de testes unitários e de integração
+# Executar a suíte de testes unitários e de integração
 ./gradlew test
 
-# Gerar JAR da aplicação
+# Compilar e gerar o arquivo JAR executável
 ./gradlew bootJar
 ```
 
-### Execução Local
+### Execução Local via Gradle
 
 ```bash
 ./gradlew bootRun
 ```
 
-### Build e Execução via Docker
-
-A imagem Docker oficial utiliza build multi-stage com **Oracle GraalVM JDK 25**, base **Ubuntu Noble**, ZGC habilitado e todas as ferramentas de mídia empacotadas:
+### Construção e Execução via Docker
 
 ```bash
-# Construir a imagem Docker
-docker build -t discord-downloader-bot .
+# Construir imagem Docker multi-stage com GraalVM 25 e CLI tools
+docker build -t discord-downloader-bot:latest .
 
 # Executar o container
 docker run -d \
-  --name discord-downloader \
+  --name discord-downloader-bot \
   -p 8080:8080 \
-  -e SPRING_KAFKA_BOOTSTRAP_SERVERS="seu-kafka:9092" \
-  -e SPRING_DATASOURCE_URL="jdbc:postgresql://seu-postgres:5432/botdb" \
+  -e SPRING_KAFKA_BOOTSTRAP_SERVERS="localhost:9092" \
+  -e SPRING_DATASOURCE_URL="jdbc:postgresql://localhost:5432/discord_bot" \
   -e SPRING_DATASOURCE_USERNAME="postgres" \
   -e SPRING_DATASOURCE_PASSWORD="senha" \
-  -e GATEWAY_GARAGE_ENDPOINT="https://seu-s3-endpoint" \
-  -e GARAGE_ACCESS_KEY="sua-key" \
-  -e GARAGE_SECRET_KEY="seu-secret" \
-  discord-downloader-bot
+  -e GATEWAY_GARAGE_ENDPOINT="http://localhost:3900" \
+  -e GATEWAY_GARAGE_BUCKET="discord-gateway-attachments" \
+  -e GARAGE_ACCESS_KEY="sua_access_key" \
+  -e GARAGE_SECRET_KEY="sua_secret_key" \
+  discord-downloader-bot:latest
 ```
