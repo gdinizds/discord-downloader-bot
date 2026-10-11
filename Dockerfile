@@ -1,5 +1,6 @@
-# ─── Stage 1: Build (JAR normal, JDK Temurin) ─────────────
-FROM eclipse-temurin:25-jdk-noble AS build
+# ─── Stage 1: Build (GraalVM JDK 25) ───────────────────────────
+ARG GRAALVM_IMAGE=container-registry.oracle.com/graalvm/jdk:25
+FROM ${GRAALVM_IMAGE} AS build
 WORKDIR /workspace
 
 COPY gradlew settings.gradle build.gradle ./
@@ -9,10 +10,15 @@ RUN ./gradlew dependencies --no-daemon -q
 COPY src src/
 RUN ./gradlew bootJar --no-daemon -x test
 
-# ─── Stage 2: Runtime (Ubuntu + JRE + CLI Tools) ────────
-FROM eclipse-temurin:25-jre-noble AS runtime
+# ─── Stage 2: Runtime (Ubuntu noble + GraalVM JDK + CLI Tools) ─
+FROM ubuntu:noble AS runtime
 WORKDIR /app
 
+# GraalVM JDK environment
+ENV JAVA_HOME=/opt/graalvm
+ENV PATH="${JAVA_HOME}/bin:${PATH}"
+
+# Install CLI tools and dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         python3 \
@@ -24,6 +30,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
     && apt-get purge -y --auto-remove curl unzip \
     && rm -rf /var/lib/apt/lists/*
+
+# Copy GraalVM JDK from build stage
+ARG GRAALVM_JDK_DIR=/usr/lib64/graalvm/graalvm-java25
+COPY --from=build ${GRAALVM_JDK_DIR} ${JAVA_HOME}
 
 RUN groupadd -r app && useradd -r -g app -u 1001 app \
     && mkdir -p /tmp/discord-downloads \

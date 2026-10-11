@@ -75,8 +75,8 @@ graalvmNative {
                     '--enable-preview',
                     '-H:+ReportExceptionStackTraces',
                     '-H:+UnlockExperimentalVMOptions',
-                    '-H:Preserve=package=org.flywaydb.*',
-                    '-H:Preserve=package=org.jboss.logging.*'
+                    '-march=compatibility',
+                    '--initialize-at-build-time=org.slf4j.LoggerFactory,ch.qos.logback'
             )
         }
     }
