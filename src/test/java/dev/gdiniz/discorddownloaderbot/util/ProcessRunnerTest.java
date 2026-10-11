@@ -90,7 +90,11 @@ class ProcessRunnerTest {
     void stdoutCanBeRedirectedToFileWhileStderrIsCaptured() throws Exception {
         var out = tmp.resolve("out.json");
 
-        var result = ProcessRunner.runWithStdoutTo(shCmd("printf '{\\x22a\\x22:1}\\n'; echo warn >&2"),
+        String script = System.getProperty("os.name").toLowerCase().contains("win")
+                ? "printf '{\\042a\\042:1}\\n'; echo warn >&2"
+                : "echo '{\"a\":1}'; echo warn >&2";
+
+        var result = ProcessRunner.runWithStdoutTo(shCmd(script),
                 out, Duration.ofSeconds(10), 10);
 
         assertThat(result.succeeded()).isTrue();
