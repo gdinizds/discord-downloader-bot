@@ -20,9 +20,20 @@ class ProcessRunnerTest {
     @TempDir
     Path tmp;
 
+    private static List<String> shCmd(String script) {
+        String sh = "sh";
+        if (System.getProperty("os.name").toLowerCase().contains("win")) {
+            String gitSh = "C:\\Program Files\\Git\\bin\\sh.exe";
+            if (Files.exists(Path.of(gitSh))) {
+                sh = gitSh;
+            }
+        }
+        return List.of(sh, "-c", script);
+    }
+
     @Test
     void returnsExitCodeAndOutput() throws Exception {
-        var result = ProcessRunner.run(List.of("sh", "-c", "echo one; echo two >&2; exit 3"),
+        var result = ProcessRunner.run(shCmd("echo one; echo two >&2; exit 3"),
                 Duration.ofSeconds(10), 10, true);
 
         assertThat(result.exitCode()).isEqualTo(3);
@@ -32,10 +43,10 @@ class ProcessRunnerTest {
 
     @Test
     void keepsOnlyTheLastLines() throws Exception {
-        var result = ProcessRunner.run(List.of("sh", "-c", "for i in 1 2 3 4 5; do echo line$i; done"),
+        var result = ProcessRunner.run(shCmd("for i in 1 2 3 4 5; do echo line$i; done"),
                 Duration.ofSeconds(10), 2, true);
 
-        assertThat(result.output()).isEqualTo("line4\nline5");
+        assertThat(result.output().replace("\r\n", "\n")).isEqualTo("line4\nline5");
     }
 
     @Test
@@ -43,7 +54,7 @@ class ProcessRunnerTest {
         var pidFile = tmp.resolve("child.pid");
 
         assertThatThrownBy(() -> ProcessRunner.run(
-                List.of("sh", "-c", "sleep 60 & echo $! > " + pidFile + "; wait"),
+                shCmd("sleep 60 & echo $! > " + pidFile.toString().replace('\\', '/') + "; wait"),
                 Duration.ofMillis(500), 10, true))
                 .isInstanceOf(TimeoutException.class);
 
@@ -58,7 +69,7 @@ class ProcessRunnerTest {
         var failure = new AtomicReference<Throwable>();
         var worker = Thread.ofVirtual().start(() -> {
             try {
-                ProcessRunner.run(List.of("sh", "-c", "echo $$ > " + pidFile + "; sleep 60"),
+                ProcessRunner.run(shCmd("echo $$ > " + pidFile.toString().replace('\\', '/') + "; sleep 60"),
                         Duration.ofSeconds(60), 10, true);
             } catch (Throwable t) {
                 failure.set(t);
@@ -79,12 +90,12 @@ class ProcessRunnerTest {
     void stdoutCanBeRedirectedToFileWhileStderrIsCaptured() throws Exception {
         var out = tmp.resolve("out.json");
 
-        var result = ProcessRunner.runWithStdoutTo(List.of("sh", "-c", "echo '{\"a\":1}'; echo warn >&2"),
+        var result = ProcessRunner.runWithStdoutTo(shCmd("printf '{\\x22a\\x22:1}\\n'; echo warn >&2"),
                 out, Duration.ofSeconds(10), 10);
 
         assertThat(result.succeeded()).isTrue();
         assertThat(Files.readString(out).strip()).isEqualTo("{\"a\":1}");
-        assertThat(result.output()).isEqualTo("warn");
+        assertThat(result.output().strip()).isEqualTo("warn");
     }
 
     @Test
@@ -92,7 +103,7 @@ class ProcessRunnerTest {
         var futures = java.util.stream.IntStream.range(0, 8)
                 .mapToObj(i -> CompletableFuture.supplyAsync(() -> {
                     try {
-                        return ProcessRunner.run(List.of("sh", "-c", "echo " + i), Duration.ofSeconds(10), 5, true).output();
+                        return ProcessRunner.run(shCmd("echo " + i), Duration.ofSeconds(10), 5, true).output().strip();
                     } catch (Exception e) {
                         throw new RuntimeException(e);
                     }

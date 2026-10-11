@@ -29,9 +29,16 @@ public class S3UploadService {
     @CircuitBreaker(name = "s3Upload", fallbackMethod = "s3Fallback")
     @Retry(name = "s3Retry")
     public String upload(Path filePath, String guildId, String correlationId) throws DownloadException {
+        return upload(filePath, guildId, correlationId, 0);
+    }
+
+    @CircuitBreaker(name = "s3Upload", fallbackMethod = "s3FallbackWithIndex")
+    @Retry(name = "s3Retry")
+    public String upload(Path filePath, String guildId, String correlationId, int index) throws DownloadException {
         var fileName = filePath.getFileName().toString();
         var ext = fileName.contains(".") ? fileName.substring(fileName.lastIndexOf('.')) : "";
-        var s3Key = "%s/%s%s".formatted(guildId, correlationId, ext);
+        var suffix = index > 0 ? "_" + index : "";
+        var s3Key = "%s/%s%s%s".formatted(guildId, correlationId, suffix, ext);
 
         log.info("Uploading to S3: correlationId={} key={}", correlationId, s3Key);
         Span.current().setAttribute("s3.key", s3Key);
@@ -58,5 +65,9 @@ public class S3UploadService {
         if (t instanceof DownloadException downloadException) throw downloadException;
         log.error("S3 circuit breaker open: correlationId={}", correlationId, t);
         throw new DownloadException("S3 service temporarily unavailable", t);
+    }
+
+    private String s3FallbackWithIndex(Path filePath, String guildId, String correlationId, int index, Throwable t) {
+        return s3Fallback(filePath, guildId, correlationId, t);
     }
 }

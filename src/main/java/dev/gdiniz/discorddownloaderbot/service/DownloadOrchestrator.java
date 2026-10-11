@@ -8,8 +8,10 @@ import dev.gdiniz.discorddownloaderbot.domain.DownloadSourceRepository;
 import dev.gdiniz.discorddownloaderbot.domain.GuildConfig;
 import dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
+import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
+import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
 import dev.gdiniz.discorddownloaderbot.kafka.ResponseProducer;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -18,6 +20,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -25,6 +28,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
@@ -52,6 +56,8 @@ public class DownloadOrchestrator implements DisposableBean {
     private record CachedSource(Optional<DownloadSource> source, long loadedAt) {}
 
     private final YtDlpService ytDlpService;
+    private final GalleryDlService galleryDlService;
+    private final DirectMediaDownloadService directDownloadService;
     private final FfmpegService ffmpegService;
     private final S3UploadService s3UploadService;
     private final DownloadSourceRepository sourceRepository;
@@ -68,13 +74,22 @@ public class DownloadOrchestrator implements DisposableBean {
     private final AtomicInteger inFlight = new AtomicInteger();
     private final Object drainLock = new Object();
 
-    public DownloadOrchestrator(YtDlpService ytDlpService, FfmpegService ffmpegService,
-                                S3UploadService s3UploadService, DownloadSourceRepository sourceRepository,
-                                DownloadJobRepository jobRepository, GuildConfigCache guildConfigCache,
+    @Autowired
+    public DownloadOrchestrator(YtDlpService ytDlpService,
+                                GalleryDlService galleryDlService,
+                                DirectMediaDownloadService directDownloadService,
+                                FfmpegService ffmpegService,
+                                S3UploadService s3UploadService,
+                                DownloadSourceRepository sourceRepository,
+                                DownloadJobRepository jobRepository,
+                                GuildConfigCache guildConfigCache,
                                 ResponseProducer responseProducer,
-                                DownloaderProperties properties, MeterRegistry meterRegistry,
+                                DownloaderProperties properties,
+                                MeterRegistry meterRegistry,
                                 UrlPolicy urlPolicy) {
         this.ytDlpService = ytDlpService;
+        this.galleryDlService = galleryDlService;
+        this.directDownloadService = directDownloadService;
         this.ffmpegService = ffmpegService;
         this.s3UploadService = s3UploadService;
         this.sourceRepository = sourceRepository;
@@ -85,6 +100,30 @@ public class DownloadOrchestrator implements DisposableBean {
         this.meterRegistry = meterRegistry;
         this.urlPolicy = urlPolicy;
         meterRegistry.gauge("downloader.job.in_flight", inFlight);
+    }
+
+    public DownloadOrchestrator(YtDlpService ytDlpService,
+                                FfmpegService ffmpegService,
+                                S3UploadService s3UploadService,
+                                DownloadSourceRepository sourceRepository,
+                                DownloadJobRepository jobRepository,
+                                GuildConfigCache guildConfigCache,
+                                ResponseProducer responseProducer,
+                                DownloaderProperties properties,
+                                MeterRegistry meterRegistry,
+                                UrlPolicy urlPolicy) {
+        this(ytDlpService,
+                new GalleryDlService(properties),
+                new DirectMediaDownloadService(properties),
+                ffmpegService,
+                s3UploadService,
+                sourceRepository,
+                jobRepository,
+                guildConfigCache,
+                responseProducer,
+                properties,
+                meterRegistry,
+                urlPolicy);
     }
 
     @PostConstruct
@@ -157,10 +196,10 @@ public class DownloadOrchestrator implements DisposableBean {
         long startTime = System.currentTimeMillis();
         Path workDir = Path.of(properties.tmpDir(), request.correlationId());
 
-        var replied  = new AtomicBoolean(false);
+        var replied   = new AtomicBoolean(false);
         var announced = new AtomicBoolean(false);
-        var timedOut = new AtomicBoolean(false);
-        var worker   = Thread.currentThread();
+        var timedOut  = new AtomicBoolean(false);
+        var worker    = Thread.currentThread();
         var timeoutTask = timeoutScheduler.schedule(() -> {
             if (timedOut.compareAndSet(false, true)) {
                 log.warn("Processing timed out after {}s: correlationId={}",
@@ -192,7 +231,7 @@ public class DownloadOrchestrator implements DisposableBean {
                 double sizeMb  = probe.fileSizeBytes() / 1_048_576.0;
                 double limitMb = maxFileBytes / 1_048_576.0;
                 if (!ffmpegService.canFitInSize(probe.durationSeconds(), maxFileBytes)) {
-                    var msg = "❌ O vídeo tem aproximadamente **%.1f MB** e não é possível comprimir para o limite de **%.0f MB** deste servidor."
+                    var msg = "❌ O arquivo tem aproximadamente **%.1f MB** e não é possível comprimir para o limite de **%.0f MB** deste servidor."
                             .formatted(sizeMb, limitMb);
                     replied.set(true);
                     responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
@@ -207,7 +246,7 @@ public class DownloadOrchestrator implements DisposableBean {
                     && !ffmpegService.canFitInSize(probe.durationSeconds(), maxFileBytes)) {
                 double limitMb   = maxFileBytes / 1_048_576.0;
                 int durationMin  = (int) (probe.durationSeconds() / 60);
-                var msg = "❌ O vídeo tem **%d min** de duração e não é possível comprimir para o limite de **%.0f MB** deste servidor."
+                var msg = "❌ O conteúdo tem **%d min** de duração e não é possível comprimir para o limite de **%.0f MB** deste servidor."
                         .formatted(durationMin, limitMb);
                 replied.set(true);
                 responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
@@ -220,79 +259,121 @@ public class DownloadOrchestrator implements DisposableBean {
             job.markDownloading();
             jobRepository.save(job);
 
-            var result = ytDlpService.execute(request, source, probe);
-
-            Path fileToUpload = result.filePath();
-            boolean image = ffmpegService.isImage(fileToUpload);
-            if (ffmpegService.needsEncode(fileToUpload, request.qualidade())) {
-                job.markEncoding();
-                jobRepository.save(job);
-                fileToUpload = ffmpegService.encode(fileToUpload, request.correlationId());
+            DownloadResult result;
+            try {
+                result = ytDlpService.execute(request, source, probe);
+            } catch (DownloadException ytdlpErr) {
+                if (timedOut.get() || ytdlpErr instanceof DownloadInterruptedException || ytdlpErr instanceof SourceBlockedException) {
+                    throw ytdlpErr;
+                }
+                log.info("yt-dlp failed, attempting gallery-dl: correlationId={} error={}",
+                        request.correlationId(), ytdlpErr.getMessage());
+                try {
+                    result = galleryDlService.execute(request, source);
+                } catch (Exception galleryErr) {
+                    if (timedOut.get() || galleryErr instanceof DownloadInterruptedException || galleryErr instanceof SourceBlockedException) {
+                        throw galleryErr;
+                    }
+                    try {
+                        result = directDownloadService.download(request, maxFileBytes);
+                    } catch (Exception directErr) {
+                        log.error("All downloaders failed: correlationId={}", request.correlationId());
+                        throw ytdlpErr;
+                    }
+                }
             }
 
-            long actualSize = fileSize(fileToUpload);
-            if (actualSize > maxFileBytes) {
-                Path compressed = null;
-                if (!image) {
-                    log.info("File too large ({}MB), attempting size-targeted compression: correlationId={}",
-                            actualSize / 1_048_576, request.correlationId());
+            List<Path> files = (result.allFiles() != null && !result.allFiles().isEmpty())
+                    ? result.allFiles()
+                    : List.of(result.filePath());
+
+            if (files.size() > 10) {
+                log.info("Capping attachments from {} to 10 for Discord message limit: correlationId={}",
+                        files.size(), request.correlationId());
+                files = files.subList(0, 10);
+            }
+
+            List<GatewayResponse.Attachment> attachments = new ArrayList<>();
+            List<String> s3Keys = new ArrayList<>();
+            long totalActualSize = 0;
+
+            for (int i = 0; i < files.size(); i++) {
+                Path fileToUpload = files.get(i);
+                boolean image = ffmpegService.isImage(fileToUpload);
+                boolean audio = ffmpegService.isAudio(fileToUpload);
+
+                if (!image && !audio && ffmpegService.needsEncode(fileToUpload, request.qualidade())) {
                     job.markEncoding();
                     jobRepository.save(job);
-                    try {
-                        compressed = ffmpegService.encodeToSize(fileToUpload, request.correlationId(), maxFileBytes);
-                    } catch (DownloadException e) {
-                        if (timedOut.get()) throw e;
-                        log.error("Compression failed: correlationId={}", request.correlationId(), e);
-                    }
-                    if (compressed != null) {
-                        long compressedSize = fileSize(compressed);
-                        if (compressedSize <= maxFileBytes) {
-                            fileToUpload = compressed;
-                            actualSize = compressedSize;
-                        } else {
-                            compressed = null;
+                    fileToUpload = ffmpegService.encode(fileToUpload, request.correlationId());
+                }
+
+                long actualSize = fileSize(fileToUpload);
+                if (actualSize > maxFileBytes) {
+                    Path compressed = null;
+                    if (!image && !audio) {
+                        log.info("File too large ({}MB), attempting size-targeted compression: correlationId={}",
+                                actualSize / 1_048_576, request.correlationId());
+                        job.markEncoding();
+                        jobRepository.save(job);
+                        try {
+                            compressed = ffmpegService.encodeToSize(fileToUpload, request.correlationId(), maxFileBytes);
+                        } catch (DownloadException e) {
+                            if (timedOut.get()) throw e;
+                            log.error("Compression failed: correlationId={}", request.correlationId(), e);
+                        }
+                        if (compressed != null) {
+                            long compressedSize = fileSize(compressed);
+                            if (compressedSize <= maxFileBytes) {
+                                fileToUpload = compressed;
+                                actualSize = compressedSize;
+                            } else {
+                                compressed = null;
+                            }
                         }
                     }
+                    if (compressed == null) {
+                        double mb      = actualSize / 1_048_576.0;
+                        double limitMb = maxFileBytes / 1_048_576.0;
+                        var msg = "❌ O arquivo tem **%.1f MB** e não foi possível comprimir para o limite de **%.0f MB** deste servidor."
+                                .formatted(mb, limitMb);
+                        replied.set(true);
+                        responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
+                        job.markFailed("File too large after compression: %.1f MB".formatted(mb));
+                        jobRepository.save(job);
+                        countFailure(host, request, "too_large");
+                        return;
+                    }
                 }
-                if (compressed == null) {
-                    double mb      = actualSize / 1_048_576.0;
-                    double limitMb = maxFileBytes / 1_048_576.0;
-                    var msg = "❌ O arquivo tem **%.1f MB** e não foi possível comprimir para o limite de **%.0f MB** deste servidor."
-                            .formatted(mb, limitMb);
-                    replied.set(true);
-                    responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
-                    job.markFailed("File too large after compression: %.1f MB".formatted(mb));
-                    jobRepository.save(job);
-                    countFailure(host, request, "too_large");
-                    return;
-                }
+
+                job.markUploading();
+                jobRepository.save(job);
+                var s3Key = s3UploadService.upload(fileToUpload, request.guildId(), request.correlationId(), i);
+                s3Keys.add(s3Key);
+                totalActualSize += actualSize;
+
+                String attachmentUrl = "%s/%s/%s".formatted(
+                        properties.s3().endpoint(),
+                        properties.s3().bucket(),
+                        s3Key);
+
+                attachments.add(new GatewayResponse.Attachment(
+                        attachmentUrl,
+                        uploadName(result.title(), fileToUpload, i, files.size()),
+                        result.title()));
             }
 
-            job.markUploading();
-            jobRepository.save(job);
-            var s3Key = s3UploadService.upload(fileToUpload, request.guildId(), request.correlationId());
-
-            String attachmentUrl = "%s/%s/%s".formatted(
-                    properties.s3().endpoint(),
-                    properties.s3().bucket(),
-                    s3Key);
-
-            var attachment = new GatewayResponse.Attachment(
-                    attachmentUrl,
-                    uploadName(result.title(), fileToUpload),
-                    result.title());
-
             replied.set(true);
-            responseProducer.send(buildReply(request, isInteraction, announced.get(), result.title(), null, List.of(attachment), true));
+            responseProducer.send(buildReply(request, isInteraction, announced.get(), result.title(), null, attachments, true));
 
-            job.markDone(actualSize, s3Key);
+            job.markDone(totalActualSize, String.join(",", s3Keys));
             jobRepository.save(job);
 
             long elapsed = System.currentTimeMillis() - startTime;
             meterRegistry.timer("downloader.job.duration", "source_host", host, "qualidade", request.qualidade())
                     .record(elapsed, TimeUnit.MILLISECONDS);
             meterRegistry.counter("downloader.job.completed", "source_host", host, "qualidade", request.qualidade()).increment();
-            meterRegistry.summary("downloader.file.size", "source_host", host).record(actualSize);
+            meterRegistry.summary("downloader.file.size", "source_host", host).record(totalActualSize);
 
         } catch (Exception e) {
             Thread.interrupted();
@@ -327,7 +408,7 @@ public class DownloadOrchestrator implements DisposableBean {
 
     private String failureMessage(Exception e, boolean timedOut) {
         if (timedOut) {
-            return "⏱ Tempo limite de **%ds** atingido. Tente com um vídeo mais curto."
+            return "⏱ Tempo limite de **%ds** atingido. Tente com um arquivo mais curto."
                     .formatted(properties.processingTimeoutSeconds());
         }
         if (e instanceof ContentUnavailableException) return MSG_UNAVAILABLE;
@@ -362,11 +443,14 @@ public class DownloadOrchestrator implements DisposableBean {
         return message.length() > 2000 ? message.substring(0, 2000) : message;
     }
 
-    private static String uploadName(String title, Path file) {
+    private static String uploadName(String title, Path file, int index, int totalFiles) {
         var name = file.getFileName().toString();
         int dot = name.lastIndexOf('.');
         var ext = dot >= 0 ? name.substring(dot) : "";
         var base = title == null || title.isBlank() ? "download" : title;
+        if (totalFiles > 1) {
+            return "%s_%d%s".formatted(base, index + 1, ext);
+        }
         return base + ext;
     }
 

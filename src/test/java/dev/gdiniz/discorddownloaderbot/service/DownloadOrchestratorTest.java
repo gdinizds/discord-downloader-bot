@@ -5,6 +5,7 @@ import dev.gdiniz.discorddownloaderbot.domain.DownloadJobRepository;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadSourceRepository;
 import dev.gdiniz.discorddownloaderbot.domain.DownloadStatus;
 import dev.gdiniz.discorddownloaderbot.dto.ContentUnavailableException;
+import dev.gdiniz.discorddownloaderbot.dto.DownloadException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
@@ -29,6 +30,7 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyDouble;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -47,6 +49,8 @@ class DownloadOrchestratorTest {
     Path tmp;
 
     private final YtDlpService ytDlp = mock(YtDlpService.class);
+    private final GalleryDlService galleryDl = mock(GalleryDlService.class);
+    private final DirectMediaDownloadService directDownload = mock(DirectMediaDownloadService.class);
     private final FfmpegService ffmpeg = mock(FfmpegService.class);
     private final S3UploadService s3 = mock(S3UploadService.class);
     private final DownloadSourceRepository sources = mock(DownloadSourceRepository.class);
@@ -77,7 +81,7 @@ class DownloadOrchestratorTest {
         var file = downloaded("corr-ok", "clip.mp4", 2048);
         when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
         when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "Meu vídeo", 2048, "mp4"));
-        when(s3.upload(any(), eq("guild-1"), eq("corr-ok"))).thenReturn("guild-1/corr-ok.mp4");
+        when(s3.upload(any(), eq("guild-1"), eq("corr-ok"), anyInt())).thenReturn("guild-1/corr-ok.mp4");
 
         orchestrator.process(interaction("corr-ok", "https://youtube.com/watch?v=ok"));
 
@@ -95,11 +99,57 @@ class DownloadOrchestratorTest {
     }
 
     @Test
+    void fallbackToGalleryDlWhenYtDlpFails() throws Exception {
+        var photo = downloaded("corr-gallery", "photo.jpg", 1024);
+        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
+        when(ytDlp.execute(any(), any(), any())).thenThrow(new DownloadException("no video formats found"));
+        when(galleryDl.execute(any(), any())).thenReturn(new DownloadResult(photo, "foto", 1024, "jpg"));
+        when(s3.upload(any(), eq("guild-1"), eq("corr-gallery"), anyInt())).thenReturn("guild-1/corr-gallery.jpg");
+        when(ffmpeg.isImage(photo)).thenReturn(true);
+
+        orchestrator.process(interaction("corr-gallery", "https://twitter.com/user/status/123456"));
+
+        var last = sentResponses().getLast();
+        assertThat(last.finished()).isTrue();
+        assertThat(last.attachments()).singleElement().satisfies(att -> {
+            assertThat(att.url()).isEqualTo("http://garage:3900/bucket/guild-1/corr-gallery.jpg");
+            assertThat(att.name()).isEqualTo("foto.jpg");
+        });
+        assertThat(savedStatuses).last().isEqualTo(DownloadStatus.DONE);
+    }
+
+    @Test
+    void multiFileAttachmentsFromGalleryAreAllUploadedAndSent() throws Exception {
+        var photo1 = downloaded("corr-multi", "img_1.jpg", 1000);
+        var photo2 = downloaded("corr-multi", "img_2.jpg", 1200);
+        var photo3 = downloaded("corr-multi", "img_3.jpg", 1400);
+        var files = List.of(photo1, photo2, photo3);
+
+        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
+        when(ytDlp.execute(any(), any(), any())).thenThrow(new DownloadException("no video formats found"));
+        when(galleryDl.execute(any(), any())).thenReturn(new DownloadResult(photo1, "album", 3600, "jpg", files));
+        when(ffmpeg.isImage(any())).thenReturn(true);
+        when(s3.upload(eq(photo1), eq("guild-1"), eq("corr-multi"), eq(0))).thenReturn("guild-1/corr-multi.jpg");
+        when(s3.upload(eq(photo2), eq("guild-1"), eq("corr-multi"), eq(1))).thenReturn("guild-1/corr-multi_1.jpg");
+        when(s3.upload(eq(photo3), eq("guild-1"), eq("corr-multi"), eq(2))).thenReturn("guild-1/corr-multi_2.jpg");
+
+        orchestrator.process(interaction("corr-multi", "https://instagram.com/p/carousel"));
+
+        var last = sentResponses().getLast();
+        assertThat(last.finished()).isTrue();
+        assertThat(last.attachments()).hasSize(3);
+        assertThat(last.attachments().get(0).name()).isEqualTo("album_1.jpg");
+        assertThat(last.attachments().get(1).name()).isEqualTo("album_2.jpg");
+        assertThat(last.attachments().get(2).name()).isEqualTo("album_3.jpg");
+        assertThat(savedStatuses).last().isEqualTo(DownloadStatus.DONE);
+    }
+
+    @Test
     void unexpectedErrorStillAnswersTheUserAndFailsTheJob() throws Exception {
         var file = downloaded("corr-boom", "clip.mp4", 2048);
         when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
         when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "clip", 2048, "mp4"));
-        when(s3.upload(any(), any(), any())).thenThrow(new IllegalStateException("socket closed"));
+        when(s3.upload(any(), any(), any(), anyInt())).thenThrow(new IllegalStateException("socket closed"));
 
         orchestrator.process(interaction("corr-boom", "https://youtube.com/watch?v=ok"));
 
@@ -112,7 +162,7 @@ class DownloadOrchestratorTest {
     @Test
     void internalUrlsAreRejectedBeforeAnyWork() {
         var policy = new UrlPolicy(host -> new InetAddress[]{InetAddress.getByAddress(host, new byte[]{10, 0, 0, 1})});
-        var strict = new DownloadOrchestrator(ytDlp, ffmpeg, s3, sources, jobs, guildConfigs, responses,
+        var strict = new DownloadOrchestrator(ytDlp, galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
                 FakeTools.properties(tmp, tmp.resolve("work"), 10), new SimpleMeterRegistry(), policy);
 
         strict.process(interaction("corr-ssrf", "http://internal.example/admin"));
@@ -207,7 +257,7 @@ class DownloadOrchestratorTest {
         var workDir = file.getParent();
         when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
         when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "clip", 10, "mp4"));
-        when(s3.upload(any(), any(), any())).thenReturn("key");
+        when(s3.upload(any(), any(), any(), anyInt())).thenReturn("key");
 
         orchestrator.process(interaction("corr-clean", "https://youtube.com/watch?v=ok"));
 
@@ -240,7 +290,7 @@ class DownloadOrchestratorTest {
     }
 
     private DownloadOrchestrator orchestrator(int timeoutSeconds) {
-        return new DownloadOrchestrator(ytDlp, ffmpeg, s3, sources, jobs, guildConfigs, responses,
+        return new DownloadOrchestrator(ytDlp, galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
                 FakeTools.properties(tmp, tmp.resolve("work"), timeoutSeconds), new SimpleMeterRegistry(), urlPolicy);
     }
 

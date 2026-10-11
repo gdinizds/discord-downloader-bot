@@ -1,4 +1,4 @@
-# ─── Stage 1: Build (JAR normal, JDK Temurin) ────────────
+# ─── Stage 1: Build (JAR normal, JDK Temurin) ─────────────
 FROM eclipse-temurin:25-jdk-noble AS build
 WORKDIR /workspace
 
@@ -20,7 +20,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
         unzip \
         ca-certificates \
-    && pip3 install --no-cache-dir --break-system-packages -U "yt-dlp[default,curl-cffi]" \
+    && pip3 install --no-cache-dir --break-system-packages -U "yt-dlp[default,curl-cffi]" gallery-dl \
     && curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
     && apt-get purge -y --auto-remove curl unzip \
     && rm -rf /var/lib/apt/lists/*

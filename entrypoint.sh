@@ -7,11 +7,11 @@ if [ -d /app/cookies-secret ]; then
     cp /app/cookies-secret/*.txt /app/cookies/
 fi
 
-echo "Updating yt-dlp..."
-if pip3 install --no-cache-dir --break-system-packages --quiet -U "yt-dlp[default,curl-cffi]"; then
-    echo "yt-dlp updated: $(yt-dlp --version)"
+echo "Updating yt-dlp and gallery-dl..."
+if pip3 install --no-cache-dir --break-system-packages --quiet -U "yt-dlp[default,curl-cffi]" gallery-dl; then
+    echo "Tools updated: yt-dlp $(yt-dlp --version), gallery-dl $(gallery-dl --version)"
 else
-    echo "yt-dlp update failed, continuing with existing version: $(yt-dlp --version)"
+    echo "Tools update failed, continuing with existing versions"
 fi
 
 if [ -f "./discord-downloader-bot" ]; then

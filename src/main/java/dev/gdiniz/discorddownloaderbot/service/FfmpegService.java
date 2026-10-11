@@ -30,12 +30,21 @@ public class FfmpegService {
     private static final long AUDIO_BITRATE_BPS     = 128_000;
     private static final Duration PROBE_TIMEOUT     = Duration.ofSeconds(15);
 
-    private static final Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "webp", "gif", "heic", "avif");
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of(
+            "jpg", "jpeg", "png", "webp", "gif", "heic", "avif", "bmp", "tiff", "svg"
+    );
+    private static final Set<String> AUDIO_EXTENSIONS = Set.of(
+            "mp3", "m4a", "ogg", "opus", "wav", "flac", "aac", "wma", "aiff"
+    );
     private static final Set<String> DISCORD_AUDIO_CODECS = Set.of("aac", "mp3");
 
     public record MediaInfo(String videoCodec, String audioCodec) {
         public boolean hasVideo() {
             return videoCodec != null;
+        }
+
+        public boolean hasAudio() {
+            return audioCodec != null;
         }
     }
 
@@ -129,8 +138,9 @@ public class FfmpegService {
     }
 
     public boolean needsEncode(Path filePath, String qualidade) {
+        if (isImage(filePath)) return false;
+        if (isAudio(filePath)) return false;
         String ext = extension(filePath);
-        if (IMAGE_EXTENSIONS.contains(ext)) return false;
         if (!"mp4".equals(ext)) return true;
 
         var info = probeCodecs(filePath);
@@ -143,6 +153,10 @@ public class FfmpegService {
 
     public boolean isImage(Path filePath) {
         return IMAGE_EXTENSIONS.contains(extension(filePath));
+    }
+
+    public boolean isAudio(Path filePath) {
+        return AUDIO_EXTENSIONS.contains(extension(filePath));
     }
 
     MediaInfo probeCodecs(Path input) {

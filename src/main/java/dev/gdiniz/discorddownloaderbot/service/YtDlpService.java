@@ -43,17 +43,25 @@ public class YtDlpService {
     private static final Set<String> COOKIE_FLAGS = Set.of("--cookies");
     private static final String COOKIE_DIR = ".auth";
     private static final List<String> UNAVAILABLE_MARKERS = List.of(
-            "unsupported url",
             "video unavailable",
             "private video",
             "this video is private",
+            "this account is private",
+            "this tweet is from a private account",
             "has been removed",
+            "this post has been deleted",
             "no longer available",
             "http error 404",
+            "tweet not found",
+            "post not found");
+    static final List<String> NO_VIDEO_MARKERS = List.of(
             "no video formats found",
             "no video could be found",
             "there is no video in this post",
-            "is not a valid url");
+            "there is no video in this tweet",
+            "unsupported url",
+            "is not a valid url",
+            "no media found");
     private static final List<String> BLOCKED_MARKERS = List.of(
             "rate-limit reached",
             "rate limit reached",
@@ -129,16 +137,19 @@ public class YtDlpService {
         }
 
         try {
-            var downloadedFile = findDownloadedFile(outputDir);
-            long size = Files.size(downloadedFile);
+            var files = findDownloadedFiles(outputDir);
+            var downloadedFile = files.stream()
+                    .max(Comparator.comparingLong(YtDlpService::sizeOrZero))
+                    .orElse(files.getFirst());
+            long totalSize = files.stream().mapToLong(YtDlpService::sizeOrZero).sum();
             String fileName = downloadedFile.getFileName().toString();
             int dotIdx = fileName.lastIndexOf('.');
             String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "mp4";
             String name = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
 
-            log.info("yt-dlp completed in {}ms: correlationId={} size={}",
-                    System.currentTimeMillis() - start, request.correlationId(), size);
-            return new DownloadResult(downloadedFile, name, size, ext);
+            log.info("yt-dlp completed in {}ms: correlationId={} size={} files={}",
+                    System.currentTimeMillis() - start, request.correlationId(), totalSize, files.size());
+            return new DownloadResult(downloadedFile, name, totalSize, ext, files);
         } catch (IOException e) {
             throw new DownloadException("Failed to read downloaded file", e);
         }
@@ -169,7 +180,12 @@ public class YtDlpService {
             var result = ProcessRunner.runWithStdoutTo(cmd, infoJson, timeout(), MAX_LOG_LINES);
             if (!result.succeeded() || Files.size(infoJson) == 0) {
                 Files.deleteIfExists(infoJson);
-                var failure = classify("yt-dlp probe exited with code " + result.exitCode(), result.output());
+                String out = result.output();
+                if (containsAny(out, NO_VIDEO_MARKERS)) {
+                    log.info("yt-dlp probe did not detect video, proceeding with fallback: correlationId={}", request.correlationId());
+                    return VideoProbe.unknown();
+                }
+                var failure = classify("yt-dlp probe exited with code " + result.exitCode(), out);
                 if (failure instanceof ContentUnavailableException || failure instanceof SourceBlockedException) {
                     throw failure;
                 }
@@ -228,6 +244,15 @@ public class YtDlpService {
             if (lower.contains(marker)) return new SourceBlockedException(message + ": " + marker);
         }
         return new DownloadException(message + ": " + output);
+    }
+
+    private static boolean containsAny(String text, List<String> markers) {
+        if (text == null) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        for (String m : markers) {
+            if (lower.contains(m)) return true;
+        }
+        return false;
     }
 
     private static double number(JsonNode node) {
@@ -290,15 +315,27 @@ public class YtDlpService {
         return ("bestvideo[vcodec^=avc1][height<=%1$d]+bestaudio[ext=m4a]"
                 + "/best[vcodec^=avc1][height<=%1$d]"
                 + "/bestvideo[height<=%1$d][ext=mp4]+bestaudio"
-                + "/best[height<=%1$d]").formatted(height);
+                + "/best[height<=%1$d]"
+                + "/bestaudio"
+                + "/best").formatted(height);
     }
 
     static Path findDownloadedFile(Path outputDir) throws IOException {
+        return findDownloadedFiles(outputDir).stream()
+                .max(Comparator.comparingLong(YtDlpService::sizeOrZero))
+                .orElseThrow(() -> new DownloadException("No file found after yt-dlp execution"));
+    }
+
+    static List<Path> findDownloadedFiles(Path outputDir) throws IOException {
         try (var stream = Files.list(outputDir)) {
-            return stream.filter(Files::isRegularFile)
+            var files = stream.filter(Files::isRegularFile)
                     .filter(p -> isMediaCandidate(p.getFileName().toString()))
-                    .max(Comparator.comparingLong(YtDlpService::sizeOrZero))
-                    .orElseThrow(() -> new DownloadException("No file found after yt-dlp execution"));
+                    .sorted(Comparator.comparing(Path::getFileName))
+                    .toList();
+            if (files.isEmpty()) {
+                throw new DownloadException("No file found after yt-dlp execution");
+            }
+            return files;
         }
     }
 
@@ -308,7 +345,10 @@ public class YtDlpService {
                 && !lower.endsWith(".part")
                 && !lower.endsWith(".ytdl")
                 && !lower.endsWith(".temp")
+                && !lower.endsWith(".tmp")
                 && !lower.endsWith(".info.json")
+                && !lower.endsWith(".json")
+                && !lower.endsWith(".txt")
                 && !lower.contains(".part-frag");
     }
 

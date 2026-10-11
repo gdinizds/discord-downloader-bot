@@ -56,6 +56,16 @@ class FfmpegServiceTest {
     }
 
     @Test
+    void audioFilesAreNeverReencoded() {
+        assertThat(service.needsEncode(Path.of("song.mp3"), "720p")).isFalse();
+        assertThat(service.needsEncode(Path.of("track.m4a"), "original")).isFalse();
+        assertThat(service.needsEncode(Path.of("audio.ogg"), "original")).isFalse();
+        assertThat(service.needsEncode(Path.of("sound.wav"), "original")).isFalse();
+        assertThat(service.isAudio(Path.of("sound.flac"))).isTrue();
+        assertThat(service.isAudio(Path.of("clip.mp4"))).isFalse();
+    }
+
+    @Test
     void h264Mp4IsSentAsIsEvenWhenAQualityWasRequested(@TempDir Path tmp) {
         var fake = fakeService(tmp);
         assertThat(fake.needsEncode(Path.of("clip_h264.mp4"), "720p")).isFalse();

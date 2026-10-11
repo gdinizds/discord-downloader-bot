@@ -33,7 +33,7 @@ public class CommandRegistrar implements ApplicationRunner {
                 {
                   "prefix": "SLASH",
                   "name": "download",
-                  "description": "Baixa um vídeo ou imagem de um link",
+                  "description": "Baixa mídia de qualquer plataforma (vídeo, áudio, imagem)",
                   "parameters": [
                     { "name": "link",      "description": "URL do conteúdo",  "type": "STRING", "required": true  },
                     { "name": "qualidade", "description": "Qualidade do vídeo (padrão: original, máx 1080p)", "type": "STRING", "required": false }
@@ -49,7 +49,7 @@ public class CommandRegistrar implements ApplicationRunner {
                 {
                   "prefix": "DOT",
                   "name": "baixar",
-                  "description": "Baixa um vídeo ou imagem — uso: .baixar <url>",
+                  "description": "Baixa mídia de qualquer plataforma — uso: .baixar <url>",
                   "is_deleted": false
                 }
                 """;

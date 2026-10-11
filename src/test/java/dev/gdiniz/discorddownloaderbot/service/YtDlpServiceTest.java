@@ -146,7 +146,7 @@ class YtDlpServiceTest {
         var selector = service.resolveFormatSelector("table", "720p");
 
         assertThat(selector).startsWith("bestvideo[vcodec^=avc1][height<=720]+bestaudio[ext=m4a]");
-        assertThat(selector).endsWith("/best[height<=720]");
+        assertThat(selector).endsWith("/best");
         assertThat(service.resolveFormatSelector("table", "original")).isEqualTo("table");
     }
 

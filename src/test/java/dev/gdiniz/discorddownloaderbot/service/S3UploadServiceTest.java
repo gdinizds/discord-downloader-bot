@@ -45,6 +45,15 @@ class S3UploadServiceTest {
     }
 
     @Test
+    void upload_withIndex_returnsIndexedS3Key() {
+        when(s3Client.putObject(any(PutObjectRequest.class), any(Path.class))).thenReturn(null);
+
+        var result = service.upload(Path.of("image.jpg"), "guild-1", "corr-1", 2);
+
+        assertThat(result).isEqualTo("guild-1/corr-1_2.jpg");
+    }
+
+    @Test
     void upload_s3Error_throwsDownloadException() {
         doThrow(S3Exception.builder().message("Connection refused").build())
                 .when(s3Client).putObject(any(PutObjectRequest.class), any(Path.class));
