@@ -28,4 +28,8 @@ os.makedirs(out_dir, exist_ok=True)
 with open(os.path.join(out_dir, "gallery_photo.jpg"), "wb") as f:
     f.write(b"\0" * 1024)
 
+if "--write-metadata" in args or "--write-info-json" in args:
+    with open(os.path.join(out_dir, "info.json"), "w", encoding="utf-8") as f:
+        f.write(json.dumps({"content": "Sample Post Title"}))
+
 sys.exit(0)

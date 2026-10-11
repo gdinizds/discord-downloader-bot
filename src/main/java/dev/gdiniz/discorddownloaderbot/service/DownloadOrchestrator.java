@@ -447,11 +447,26 @@ public class DownloadOrchestrator implements DisposableBean {
         var name = file.getFileName().toString();
         int dot = name.lastIndexOf('.');
         var ext = dot >= 0 ? name.substring(dot) : "";
-        var base = title == null || title.isBlank() ? "download" : title;
+        var fallback = dot >= 0 ? name.substring(0, dot) : name;
+        var base = sanitizeFileName(title, fallback.isBlank() ? "download" : fallback);
         if (totalFiles > 1) {
             return "%s_%d%s".formatted(base, index + 1, ext);
         }
         return base + ext;
+    }
+
+    private static String sanitizeFileName(String title, String fallback) {
+        if (title == null || title.isBlank()) {
+            return fallback;
+        }
+        String clean = title.replaceAll("[\\r\\n\\t]+", " ")
+                .replaceAll("[\\\\/:*?\"<>|]", "_")
+                .replaceAll("\\s+", " ")
+                .strip();
+        if (clean.length() > 80) {
+            clean = clean.substring(0, 80).strip();
+        }
+        return clean.isBlank() ? fallback : clean;
     }
 
     private GatewayResponse buildReply(DownloadRequest request, boolean isInteraction, boolean announced,

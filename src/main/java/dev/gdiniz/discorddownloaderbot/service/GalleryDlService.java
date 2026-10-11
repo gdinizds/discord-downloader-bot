@@ -16,6 +16,8 @@ import io.opentelemetry.api.trace.Span;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -34,6 +36,7 @@ public class GalleryDlService {
 
     private static final Logger log = LoggerFactory.getLogger(GalleryDlService.class);
     private static final int MAX_LOG_LINES = 50;
+    private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private static final Set<String> COOKIE_FLAGS = Set.of("--cookies", "--cookies-from-browser");
 
@@ -80,6 +83,8 @@ public class GalleryDlService {
         cmd.add(outputDir.toString());
         cmd.add("-D");
         cmd.add("");
+        cmd.add("--write-metadata");
+        cmd.add("--write-info-json");
 
         addCookiesIfPresent(cmd, source.getExtraArgs(), outputDir);
 
@@ -112,11 +117,16 @@ public class GalleryDlService {
                 String fileName = primaryFile.getFileName().toString();
                 int dotIdx = fileName.lastIndexOf('.');
                 String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "jpg";
-                String name = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+                String fallbackName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
 
-                log.info("gallery-dl completed in {}ms: correlationId={} files={} totalSize={}",
-                        System.currentTimeMillis() - start, request.correlationId(), files.size(), totalSize);
-                return new DownloadResult(primaryFile, name, totalSize, ext, files);
+                String title = extractTitleFromMetadata(outputDir, primaryFile);
+                if (title == null || title.isBlank()) {
+                    title = fallbackName;
+                }
+
+                log.info("gallery-dl completed in {}ms: correlationId={} files={} totalSize={} title={}",
+                        System.currentTimeMillis() - start, request.correlationId(), files.size(), totalSize, title);
+                return new DownloadResult(primaryFile, title, totalSize, ext, files);
             }
         } catch (IOException e) {
             log.warn("Failed scanning for downloaded files: correlationId={}", request.correlationId(), e);
@@ -138,6 +148,93 @@ public class GalleryDlService {
                     .sorted(Comparator.comparing(Path::getFileName))
                     .toList();
         }
+    }
+
+    static String extractTitleFromMetadata(Path outputDir, Path primaryFile) {
+        Path infoJson = outputDir.resolve("info.json");
+        if (Files.exists(infoJson)) {
+            String title = readTitleFromJson(infoJson);
+            if (title != null && !title.isBlank()) {
+                return title;
+            }
+        }
+
+        if (primaryFile != null) {
+            Path directSidecar = Path.of(primaryFile + ".json");
+            if (Files.exists(directSidecar)) {
+                String title = readTitleFromJson(directSidecar);
+                if (title != null && !title.isBlank()) {
+                    return title;
+                }
+            }
+            String primaryStr = primaryFile.toString();
+            int dot = primaryStr.lastIndexOf('.');
+            if (dot > 0) {
+                Path strippedSidecar = Path.of(primaryStr.substring(0, dot) + ".json");
+                if (Files.exists(strippedSidecar)) {
+                    String title = readTitleFromJson(strippedSidecar);
+                    if (title != null && !title.isBlank()) {
+                        return title;
+                    }
+                }
+            }
+        }
+
+        try (var stream = Files.list(outputDir)) {
+            var jsonFiles = stream.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".json"))
+                    .toList();
+            for (Path p : jsonFiles) {
+                if (p.equals(infoJson)) continue;
+                String title = readTitleFromJson(p);
+                if (title != null && !title.isBlank()) {
+                    return title;
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Failed scanning directory for metadata json: {}", e.getMessage());
+        }
+
+        return null;
+    }
+
+    static String readTitleFromJson(Path jsonPath) {
+        try (var in = Files.newInputStream(jsonPath)) {
+            JsonNode root = JSON.readTree(in);
+            if (root == null) return null;
+
+            if (root.isArray() && !root.isEmpty()) {
+                root = root.get(0);
+            }
+
+            String[] candidateKeys = {"content", "title", "description", "caption", "text", "status_text"};
+            for (String key : candidateKeys) {
+                JsonNode node = root.path(key);
+                if (node != null && node.isTextual()) {
+                    String val = node.asText().strip();
+                    if (!val.isBlank()) {
+                        val = unescapeHtml(val);
+                        if (val.length() > 2000) {
+                            val = val.substring(0, 1997) + "...";
+                        }
+                        return val;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            log.debug("Could not read title from {}: {}", jsonPath, e.getMessage());
+        }
+        return null;
+    }
+
+    private static String unescapeHtml(String text) {
+        if (text == null) return null;
+        return text.replace("&amp;", "&")
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&quot;", "\"")
+                .replace("&#39;", "'")
+                .replace("&apos;", "'");
     }
 
     private static boolean isMediaCandidate(String name) {

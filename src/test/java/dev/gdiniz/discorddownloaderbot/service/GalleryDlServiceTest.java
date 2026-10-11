@@ -54,4 +54,41 @@ class GalleryDlServiceTest {
         assertThat(files).hasSize(2);
         assertThat(files.stream().map(p -> p.getFileName().toString())).containsExactly("image1.jpg", "image2.png");
     }
+
+    @Test
+    void extractTitleFromTwitterMetadataExtractsContent() throws Exception {
+        var dir = Files.createDirectories(tmp.resolve("twitter-meta"));
+        var image = dir.resolve("2109219814325600384_1.jpg");
+        Files.write(image, new byte[100]);
+        var meta = dir.resolve("2109219814325600384_1.jpg.json");
+        Files.writeString(meta, "{\"tweet_id\": 2109219814325600384, \"content\": \"🚨URGENTE - Rui Costa Pimenta declara apoio a Flávio Bolsonaro\"}");
+
+        String title = GalleryDlService.extractTitleFromMetadata(dir, image);
+
+        assertThat(title).isEqualTo("🚨URGENTE - Rui Costa Pimenta declara apoio a Flávio Bolsonaro");
+    }
+
+    @Test
+    void extractTitleFromInstagramMetadataExtractsDescription() throws Exception {
+        var dir = Files.createDirectories(tmp.resolve("insta-meta"));
+        var image = dir.resolve("photo.jpg");
+        Files.write(image, new byte[100]);
+        var info = dir.resolve("info.json");
+        Files.writeString(info, "{\"id\": 123, \"description\": \"Beautiful sunset &amp; clouds\"}");
+
+        String title = GalleryDlService.extractTitleFromMetadata(dir, image);
+
+        assertThat(title).isEqualTo("Beautiful sunset & clouds");
+    }
+
+    @Test
+    void extractTitleReturnsNullWhenNoJsonPresent() throws Exception {
+        var dir = Files.createDirectories(tmp.resolve("no-meta"));
+        var image = dir.resolve("2109219814325600384_1.jpg");
+        Files.write(image, new byte[100]);
+
+        String title = GalleryDlService.extractTitleFromMetadata(dir, image);
+
+        assertThat(title).isNull();
+    }
 }
