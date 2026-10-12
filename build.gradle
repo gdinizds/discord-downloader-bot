@@ -35,8 +35,6 @@ dependencies {
     implementation 'org.springframework.boot:spring-boot-starter-actuator'
     implementation 'org.aspectj:aspectjweaver'
 
-    // Config não-sensível externalizada (Consul KV). Segredos vêm do Vault Agent
-    // Injector (sidecar no k8s), sem necessidade de client Vault na aplicação.
     implementation 'org.springframework.cloud:spring-cloud-starter-consul-config'
 
     implementation 'org.springframework.kafka:spring-kafka'
@@ -79,8 +77,7 @@ graalvmNative {
                     '-H:+UnlockExperimentalVMOptions',
                     '-march=compatibility',
                     '--enable-monitoring=heapdump,threaddump,jfr',
-                    '--initialize-at-build-time=org.slf4j.LoggerFactory,ch.qos.logback',
-                    '-H:Preserve=package=dev.gdiniz.discorddownloaderbot.*,package=org.flywaydb.*,package=org.jboss.logging.*,package=org.postgresql.*,package=net.jpountz.*,package=org.springframework.cloud.consul.model.*,package=com.ecwid.consul.*,package=io.github.resilience4j.*'
+                    '-H:Preserve=package=org.flywaydb.*'
             )
         }
     }

@@ -18,7 +18,6 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
     public void registerHints(RuntimeHints hints, ClassLoader classLoader) {
         ClassLoader cl = classLoader != null ? classLoader : Thread.currentThread().getContextClassLoader();
 
-        // Flyway 11: ServiceLoader plugins and Jackson-cloned ConfigurationExtension classes
         hints.reflection().registerType(Plugin.class, MemberCategory.values());
         ServiceLoader.load(Plugin.class, cl).stream().forEach(provider -> {
             Class<?> pluginClass = provider.type();
@@ -28,7 +27,6 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
             }
         });
 
-        // Scan packages required at runtime for reflection, logging, Consul KV, Flyway, Resilience4j, and Kafka
         String[] packagePatterns = {
                 "classpath*:dev/gdiniz/discorddownloaderbot/**/*.class",
                 "classpath*:org/flywaydb/**/*.class",
@@ -48,14 +46,14 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
         registerTypeIfPresent(hints, cl, "com.zaxxer.hikari.HikariConfig");
         registerTypeIfPresent(hints, cl, "com.zaxxer.hikari.HikariDataSource");
 
-        // Resources for Flyway, ServiceLoader, Hibernate/JBoss i18n, and LZ4 native library
         hints.resources().registerPattern("db/migration/**");
         hints.resources().registerPattern("db/migration/*");
         hints.resources().registerPattern("db/migration/*.sql");
         hints.resources().registerPattern("org/flywaydb/core/internal/version.txt");
         hints.resources().registerPattern("org/flywaydb/**/*.sql");
         hints.resources().registerPattern("META-INF/services/**");
-        hints.resources().registerPattern("**/*.i18n.properties");
+        hints.resources().registerPattern("org/hibernate/**/*.i18n.properties");
+        hints.resources().registerPattern("org/jboss/**/*.i18n.properties");
         hints.resources().registerPattern("net/jpountz/util/**");
     }
 

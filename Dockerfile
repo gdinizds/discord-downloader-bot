@@ -1,4 +1,3 @@
-# ─── Stage 1: Build (Oracle GraalVM Native Image 25) ───────────
 ARG GRAALVM_IMAGE=container-registry.oracle.com/graalvm/native-image:25
 FROM ${GRAALVM_IMAGE} AS build
 WORKDIR /workspace
@@ -12,15 +11,12 @@ RUN ./gradlew dependencies --no-daemon -q
 COPY src src/
 RUN ./gradlew nativeCompile --no-daemon -x test
 
-# ─── Stage 2: Runtime (Ubuntu noble + Native Binary + CLI Tools) ─
 FROM ubuntu:noble AS runtime
 WORKDIR /app
 
-# UTF-8 Locale
 ENV LANG=C.UTF-8
 ENV LC_ALL=C.UTF-8
 
-# Install CLI tools and minimal native runtime libraries
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
         python3 \
@@ -49,4 +45,5 @@ USER app
 EXPOSE 8080
 
 ENTRYPOINT ["./entrypoint.sh"]
+
 
