@@ -19,7 +19,7 @@ fi
 
 if [ -f "./discord-downloader-bot" ]; then
     echo "Starting GraalVM Native Image..."
-    exec ./discord-downloader-bot ${NATIVE_OPTS:-}
+    exec ./discord-downloader-bot -XX:MaximumHeapSizePercent=${NATIVE_MAX_HEAP_PERCENT:-50} ${NATIVE_OPTS:-}
 else
     echo "Starting GraalVM JVM..."
 

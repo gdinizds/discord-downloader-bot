@@ -74,14 +74,20 @@ graalvmNative {
                     '-O3',
                     '--no-fallback',
                     '--enable-preview',
+                    '--enable-url-protocols=http,https',
                     '-H:+ReportExceptionStackTraces',
                     '-H:+UnlockExperimentalVMOptions',
                     '-march=compatibility',
                     '--enable-monitoring=heapdump,threaddump,jfr',
-                    '--initialize-at-build-time=org.slf4j.LoggerFactory,ch.qos.logback'
+                    '--initialize-at-build-time=org.slf4j.LoggerFactory,ch.qos.logback',
+                    '-H:Preserve=package=dev.gdiniz.discorddownloaderbot.*,package=org.flywaydb.*,package=org.jboss.logging.*,package=org.postgresql.*,package=net.jpountz.*,package=org.springframework.cloud.consul.model.*,package=com.ecwid.consul.*,package=io.github.resilience4j.*'
             )
         }
     }
+}
+
+tasks.matching { it.name.startsWith("processTestAot") || it.name.startsWith("aotTest") }.configureEach {
+    enabled = false
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -92,3 +98,4 @@ tasks.named('test') {
     useJUnitPlatform()
     defaultCharacterEncoding = 'UTF-8'
 }
+
