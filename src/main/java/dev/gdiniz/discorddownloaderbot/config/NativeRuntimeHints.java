@@ -35,7 +35,8 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
                 "classpath*:org/springframework/cloud/consul/model/**/*.class",
                 "classpath*:com/ecwid/consul/**/*.class",
                 "classpath*:net/jpountz/**/*.class",
-                "classpath*:io/github/resilience4j/**/*.class"
+                "classpath*:io/github/resilience4j/**/*.class",
+                "classpath*:org/apache/kafka/common/serialization/**/*.class"
         };
         for (String pattern : packagePatterns) {
             registerClassesByPattern(hints, cl, pattern);
@@ -43,6 +44,7 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
 
         registerTypeIfPresent(hints, cl, "org.postgresql.Driver");
         registerTypeIfPresent(hints, cl, "org.postgresql.PGProperty");
+        registerTypeIfPresent(hints, cl, "org.hibernate.dialect.PostgreSQLDialect");
         registerTypeIfPresent(hints, cl, "com.zaxxer.hikari.HikariConfig");
         registerTypeIfPresent(hints, cl, "com.zaxxer.hikari.HikariDataSource");
 
@@ -51,7 +53,7 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
         hints.resources().registerPattern("db/migration/*.sql");
         hints.resources().registerPattern("org/flywaydb/core/internal/version.txt");
         hints.resources().registerPattern("org/flywaydb/**/*.sql");
-        hints.resources().registerPattern("META-INF/services/**");
+        hints.resources().registerPattern("META-INF/services/org.flywaydb.*");
         hints.resources().registerPattern("org/hibernate/**/*.i18n.properties");
         hints.resources().registerPattern("org/jboss/**/*.i18n.properties");
         hints.resources().registerPattern("net/jpountz/util/**");
