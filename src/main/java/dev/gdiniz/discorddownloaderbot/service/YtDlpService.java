@@ -9,6 +9,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
 import dev.gdiniz.discorddownloaderbot.dto.VideoProbe;
+import dev.gdiniz.discorddownloaderbot.util.MetadataUtils;
 import dev.gdiniz.discorddownloaderbot.util.ProcessRunner;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -110,6 +111,7 @@ public class YtDlpService {
             command.add("--load-info-json");
             command.add(probe.infoJson().toString());
         } else {
+            command.add("--write-info-json");
             command.add("--");
             command.add(request.url());
         }
@@ -145,11 +147,17 @@ public class YtDlpService {
             String fileName = downloadedFile.getFileName().toString();
             int dotIdx = fileName.lastIndexOf('.');
             String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "mp4";
-            String name = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+            String fallbackName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
 
-            log.info("yt-dlp completed in {}ms: correlationId={} size={} files={}",
-                    System.currentTimeMillis() - start, request.correlationId(), totalSize, files.size());
-            return new DownloadResult(downloadedFile, name, totalSize, ext, files);
+            Path probeInfo = (probe != null && probe.hasInfoJson()) ? probe.infoJson() : null;
+            String title = MetadataUtils.extractTitleFromMetadata(outputDir, downloadedFile, probeInfo);
+            if (title == null || title.isBlank()) {
+                title = fallbackName;
+            }
+
+            log.info("yt-dlp completed in {}ms: correlationId={} size={} files={} title={}",
+                    System.currentTimeMillis() - start, request.correlationId(), totalSize, files.size(), title);
+            return new DownloadResult(downloadedFile, title, totalSize, ext, files);
         } catch (IOException e) {
             throw new DownloadException("Failed to read downloaded file", e);
         }

@@ -2,6 +2,8 @@
 ARG GRAALVM_IMAGE=container-registry.oracle.com/graalvm/jdk:25
 FROM ${GRAALVM_IMAGE} AS build
 WORKDIR /workspace
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 COPY gradlew settings.gradle build.gradle ./
 COPY gradle gradle/
@@ -13,6 +15,10 @@ RUN ./gradlew bootJar --no-daemon -x test
 # ─── Stage 2: Runtime (Ubuntu noble + GraalVM JDK + CLI Tools) ─
 FROM ubuntu:noble AS runtime
 WORKDIR /app
+
+# UTF-8 Locale
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 # GraalVM JDK environment
 ENV JAVA_HOME=/opt/graalvm

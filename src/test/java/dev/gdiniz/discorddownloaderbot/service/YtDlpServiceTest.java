@@ -196,4 +196,18 @@ class YtDlpServiceTest {
 
         assertThat(cmd).containsExactly("--cookies", "/nope/cookies.txt");
     }
+
+    @Test
+    void executePreservesUtf8SpecialCharactersAndEmojisInTitle() throws Exception {
+        var req = request("corr-utf8", "https://instagram.com/reel/utf8");
+        var workDir = tmp.resolve("work").resolve("corr-utf8");
+        Files.createDirectories(workDir);
+        var probeJson = workDir.resolve("probe.info.json");
+        Files.writeString(probeJson, "{\"title\": \"Virou programador, deve tá rico agora 🤡💻 #viral\", \"filesize\": 2048, \"duration\": 10}");
+        var probe = new VideoProbe(2048, 10, probeJson);
+
+        var result = service.execute(req, source, probe);
+
+        assertThat(result.title()).isEqualTo("Virou programador, deve tá rico agora 🤡💻 #viral");
+    }
 }

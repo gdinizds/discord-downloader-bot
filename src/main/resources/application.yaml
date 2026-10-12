@@ -33,6 +33,13 @@ spring:
       auto-offset-reset: earliest
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      properties:
+        key.deserializer.encoding: UTF-8
+        value.deserializer.encoding: UTF-8
+    producer:
+      properties:
+        key.serializer.encoding: UTF-8
+        value.serializer.encoding: UTF-8
 
   jpa:
     hibernate:

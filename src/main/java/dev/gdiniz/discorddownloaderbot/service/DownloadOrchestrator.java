@@ -14,6 +14,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
 import dev.gdiniz.discorddownloaderbot.kafka.ResponseProducer;
+import dev.gdiniz.discorddownloaderbot.util.MetadataUtils;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.opentelemetry.api.trace.Span;
 import jakarta.annotation.PostConstruct;
@@ -360,11 +361,12 @@ public class DownloadOrchestrator implements DisposableBean {
                 attachments.add(new GatewayResponse.Attachment(
                         attachmentUrl,
                         uploadName(result.title(), fileToUpload, i, files.size()),
-                        result.title()));
+                        MetadataUtils.truncateSafely(result.title(), 1024)));
             }
 
             replied.set(true);
-            responseProducer.send(buildReply(request, isInteraction, announced.get(), result.title(), null, attachments, true));
+            responseProducer.send(buildReply(request, isInteraction, announced.get(),
+                    MetadataUtils.truncateWithEllipsis(result.title(), 2000), null, attachments, true));
 
             job.markDone(totalActualSize, String.join(",", s3Keys));
             jobRepository.save(job);
@@ -456,17 +458,7 @@ public class DownloadOrchestrator implements DisposableBean {
     }
 
     private static String sanitizeFileName(String title, String fallback) {
-        if (title == null || title.isBlank()) {
-            return fallback;
-        }
-        String clean = title.replaceAll("[\\r\\n\\t]+", " ")
-                .replaceAll("[\\\\/:*?\"<>|]", "_")
-                .replaceAll("\\s+", " ")
-                .strip();
-        if (clean.length() > 80) {
-            clean = clean.substring(0, 80).strip();
-        }
-        return clean.isBlank() ? fallback : clean;
+        return MetadataUtils.sanitizeFileName(title, fallback);
     }
 
     private GatewayResponse buildReply(DownloadRequest request, boolean isInteraction, boolean announced,

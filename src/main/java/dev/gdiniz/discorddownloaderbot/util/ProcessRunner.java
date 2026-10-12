@@ -44,6 +44,9 @@ public final class ProcessRunner {
     private static Result execute(ProcessBuilder builder, List<String> command, Duration timeout,
                                   int maxLines, boolean readStderr)
             throws IOException, InterruptedException, TimeoutException {
+        builder.environment().put("LANG", "C.UTF-8");
+        builder.environment().put("LC_ALL", "C.UTF-8");
+        builder.environment().put("PYTHONIOENCODING", "utf-8");
         Process process = builder.start();
         CompletableFuture<String> output = CompletableFuture.supplyAsync(() -> {
             try {

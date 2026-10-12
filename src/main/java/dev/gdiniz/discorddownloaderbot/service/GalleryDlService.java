@@ -8,6 +8,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
+import dev.gdiniz.discorddownloaderbot.util.MetadataUtils;
 import dev.gdiniz.discorddownloaderbot.util.ProcessRunner;
 import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import io.github.resilience4j.circuitbreaker.annotation.CircuitBreaker;
@@ -151,90 +152,15 @@ public class GalleryDlService {
     }
 
     static String extractTitleFromMetadata(Path outputDir, Path primaryFile) {
-        Path infoJson = outputDir.resolve("info.json");
-        if (Files.exists(infoJson)) {
-            String title = readTitleFromJson(infoJson);
-            if (title != null && !title.isBlank()) {
-                return title;
-            }
-        }
-
-        if (primaryFile != null) {
-            Path directSidecar = Path.of(primaryFile + ".json");
-            if (Files.exists(directSidecar)) {
-                String title = readTitleFromJson(directSidecar);
-                if (title != null && !title.isBlank()) {
-                    return title;
-                }
-            }
-            String primaryStr = primaryFile.toString();
-            int dot = primaryStr.lastIndexOf('.');
-            if (dot > 0) {
-                Path strippedSidecar = Path.of(primaryStr.substring(0, dot) + ".json");
-                if (Files.exists(strippedSidecar)) {
-                    String title = readTitleFromJson(strippedSidecar);
-                    if (title != null && !title.isBlank()) {
-                        return title;
-                    }
-                }
-            }
-        }
-
-        try (var stream = Files.list(outputDir)) {
-            var jsonFiles = stream.filter(Files::isRegularFile)
-                    .filter(p -> p.getFileName().toString().endsWith(".json"))
-                    .toList();
-            for (Path p : jsonFiles) {
-                if (p.equals(infoJson)) continue;
-                String title = readTitleFromJson(p);
-                if (title != null && !title.isBlank()) {
-                    return title;
-                }
-            }
-        } catch (IOException e) {
-            log.warn("Failed scanning directory for metadata json: {}", e.getMessage());
-        }
-
-        return null;
+        return MetadataUtils.extractTitleFromMetadata(outputDir, primaryFile, null);
     }
 
     static String readTitleFromJson(Path jsonPath) {
-        try (var in = Files.newInputStream(jsonPath)) {
-            JsonNode root = JSON.readTree(in);
-            if (root == null) return null;
-
-            if (root.isArray() && !root.isEmpty()) {
-                root = root.get(0);
-            }
-
-            String[] candidateKeys = {"content", "title", "description", "caption", "text", "status_text"};
-            for (String key : candidateKeys) {
-                JsonNode node = root.path(key);
-                if (node != null && node.isTextual()) {
-                    String val = node.asText().strip();
-                    if (!val.isBlank()) {
-                        val = unescapeHtml(val);
-                        if (val.length() > 2000) {
-                            val = val.substring(0, 1997) + "...";
-                        }
-                        return val;
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Could not read title from {}: {}", jsonPath, e.getMessage());
-        }
-        return null;
+        return MetadataUtils.readTitleFromJson(jsonPath);
     }
 
     private static String unescapeHtml(String text) {
-        if (text == null) return null;
-        return text.replace("&amp;", "&")
-                .replace("&lt;", "<")
-                .replace("&gt;", ">")
-                .replace("&quot;", "\"")
-                .replace("&#39;", "'")
-                .replace("&apos;", "'");
+        return MetadataUtils.unescapeHtml(text);
     }
 
     private static boolean isMediaCandidate(String name) {

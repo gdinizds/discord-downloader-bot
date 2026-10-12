@@ -58,6 +58,10 @@ out = template.replace("%(title).150B", "clip").replace("%(ext)s", "mp4")
 os.makedirs(os.path.dirname(out), exist_ok=True)
 with open(out, "wb") as f:
     f.write(b"\0" * 2048)
+if "--write-info-json" in args:
+    info_path = os.path.splitext(out)[0] + ".info.json"
+    with open(info_path, "w", encoding="utf-8") as f:
+        f.write(json.dumps({"title": "clip"}))
 with open(os.path.join(os.path.dirname(out), "leftover.mp4.part"), "wb") as f:
     f.write(b"\0" * 8192)
 sys.exit(0)
