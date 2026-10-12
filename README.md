@@ -1,5 +1,5 @@
 [![Java](https://img.shields.io/badge/Java-25-orange?logo=openjdk)](https://openjdk.org/)
-[![GraalVM](https://img.shields.io/badge/GraalVM-JDK%2025-red?logo=graalvm)](https://www.graalvm.org/)
+[![Oracle GraalVM](https://img.shields.io/badge/Oracle%20GraalVM%20(GFTC)-JDK%2025-red?logo=graalvm)](https://www.graalvm.org/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.0.6-brightgreen?logo=springboot)](https://spring.io/projects/spring-boot)
 [![Apache Kafka](https://img.shields.io/badge/Apache%20Kafka%20%2F%20Redpanda-Event--Driven-black?logo=apachekafka)](https://kafka.apache.org/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16%2B-blue?logo=postgresql)](https://www.postgresql.org/)
@@ -7,7 +7,7 @@
 [![yt-dlp](https://img.shields.io/badge/yt--dlp-2026-blueviolet?logo=youtube)](https://github.com/yt-dlp/yt-dlp)
 [![ffmpeg](https://img.shields.io/badge/FFmpeg-libx264-green?logo=ffmpeg)](https://ffmpeg.org/)
 
-O **discord-downloader-bot** é um microserviço de alta performance, assíncrono e orientado a eventos projetado para processar downloads e transcodificação sob demanda de mídias (vídeos, áudios, imagens, galerias e carrosséis) a partir do ecossistema Discord. Desenvolvido sobre o **Java 25 com GraalVM** e **Spring Boot 4**, ele adota concorrência massiva baseada em **Virtual Threads (Project Loom)** e comunicação desacoplada via **Kafka / Redpanda**.
+O **discord-downloader-bot** é um microserviço de alta performance, assíncrono e orientado a eventos projetado para processar downloads e transcodificação sob demanda de mídias (vídeos, áudios, imagens, galerias e carrosséis) a partir do ecossistema Discord. Desenvolvido sobre o **Java 25 com Oracle GraalVM (GFTC)** e **Spring Boot 4**, ele adota concorrência massiva baseada em **Virtual Threads (Project Loom)** e comunicação desacoplada via **Kafka / Redpanda**.
 
 O bot conta com um **pipeline triplo de extração com fallback automático** (`yt-dlp` ➔ `gallery-dl` ➔ `Direct HTTP Streaming`), transcodificação adaptativa inteligente e compressão orientada a tamanho alvo via **FFmpeg**, isolamento de credenciais por job, proteção corporativa **anti-SSRF** e resiliência multicamadas com **Resilience4j**.
 
@@ -30,7 +30,7 @@ graph TD
         KP_OUT_CMD[Kafka: discord.gateway.commands]
     end
 
-    subgraph "Core: discord-downloader-bot (Spring Boot 4 + GraalVM 25)"
+    subgraph "Core: discord-downloader-bot (Spring Boot 4 + Oracle GraalVM 25)"
         subgraph Inbound Adapters
             EC[EventConsumer - Virtual Threads]
             GEC[GuildEventConsumer]
@@ -250,17 +250,24 @@ Ao receber URLs submetidas por usuários do Discord, o bot aplica validação pr
 
 ---
 
-## ⚡ Runtime de Alta Performance com GraalVM e Java 25
+## ⚡ Runtime de Alta Performance com Oracle GraalVM (GFTC) e Java 25
 
-O serviço é compilado e executado sobre o **Oracle GraalVM JDK 25**, aproveitando as mais recentes otimizações da JVM para containers de alto throughput:
+O serviço é compilado e executado sobre o **Oracle GraalVM JDK 25** sob a licença **GFTC (GraalVM Free Terms and Conditions)**, aproveitando as otimizações enterprise da JVM para microserviços orientados a I/O e alta concorrência:
 
 ```dockerfile
 ARG GRAALVM_IMAGE=container-registry.oracle.com/graalvm/jdk:25
 ```
 
-- **Generational ZGC (`-XX:+UseZGC`)**: Coletor de lixo ultrarrápido com pausas garantidas abaixo de 1 milissegundo, eliminando congelamentos durante processamento intensivo de I/O.
-- **Compilador GraalVM JIT (`-XX:+EnableJVMCI -XX:+UseJVMCICompiler`)**: Otimizações avançadas de compilação JIT de alto rendimento com inlining agressivo.
+- **Oracle GraalVM Enterprise JIT**:
+  - `-XX:+UnlockExperimentalVMOptions -XX:+EnableJVMCI -XX:+UseJVMCICompiler`: Ativa o compilador GraalVM JIT no topo da JVM.
+  - `-Djdk.graal.CompilerConfiguration=enterprise`: Habilita a suíte de otimizações enterprise da Oracle para throughput máximo.
+  - `-Djdk.graal.Vectorization=true`: Vetorização SIMD automática para aceleração de buffers de I/O e manipulação de payloads JSON.
+  - `-Djdk.graal.UsePriorityInlining=true`: Heurística avançada de inlining por prioridade, aplanando cadeias funcionais e closures em Virtual Threads.
+  - `-XX:+TieredCompilation`: Tier 1-3 (C1) para inicialização ultrarrápida do container + Tier 4 (GraalVM) para processamento estável.
+- **Generational ZGC (`-XX:+UseZGC`)**: Coletor de lixo ultrarrápido com pausas garantidas abaixo de 1 milissegundo, eliminando congelamentos durante processamento intensivo de streams e I/O.
 - **Compact Object Headers (`-XX:+UseCompactObjectHeaders`)**: Redução substancial de footprint de memória em objetos Java 25.
+- **Ergonomia de Memória para Subprocessos (`FFmpeg` / `yt-dlp`)**: Limite da Heap balanceado (`MaxRAMPercentage=65%`, `InitialRAMPercentage=30%`), reservando folga de memória no container para os binários nativos executados fora da JVM.
+- **DNS Dinâmico no Kubernetes**: Cache de DNS configurado com TTL de 30s (`networkaddress.cache.ttl=30`) para resolução dinâmica de serviços (Consul, Redpanda, Garage).
 - **Virtual Threads (Project Loom)**: Ativadas globalmente (`spring.threads.virtual.enabled: true`), permitindo que chamadas síncronas de subprocessos (`ProcessRunner.waitFor()`) e transferências S3 escalem centenas de jobs simultâneos sem sobrecarregar threads do SO.
 - **Atualização Automática de Ferramentas CLI**: O `YtDlpUpdater` roda diariamente via cron (`0 0 4 * * *`) executando atualização in-place de `yt-dlp` e `gallery-dl` via `pip3`, mantendo paridade com mudanças constantes nas APIs das plataformas de streaming.
 

@@ -29,18 +29,24 @@ else
       -XX:+UnlockExperimentalVMOptions
       -XX:+EnableJVMCI
       -XX:+UseJVMCICompiler
-      -Dgraal.TuneInlinerExploration=1
+      -Djdk.graal.CompilerConfiguration=enterprise
+      -Djdk.graal.Vectorization=true
+      -Djdk.graal.UsePriorityInlining=true
+      -Djdk.graal.TuneInlinerExploration=1
+      -XX:+TieredCompilation
       -XX:+UseCompactObjectHeaders
       -XX:+UseZGC
       -XX:+AlwaysPreTouch
       -XX:+UseStringDeduplication
-      -XX:InitialRAMPercentage=${JVM_INITIAL_RAM_PERCENTAGE:-50.0}
-      -XX:MaxRAMPercentage=${JVM_MAX_RAM_PERCENTAGE:-75.0}
-      -XX:MinRAMPercentage=${JVM_MIN_RAM_PERCENTAGE:-50.0}
+      -XX:InitialRAMPercentage=${JVM_INITIAL_RAM_PERCENTAGE:-30.0}
+      -XX:MaxRAMPercentage=${JVM_MAX_RAM_PERCENTAGE:-65.0}
+      -XX:MinRAMPercentage=${JVM_MIN_RAM_PERCENTAGE:-30.0}
       -XX:MaxDirectMemorySize=${JVM_MAX_DIRECT_MEMORY:-512m}
       -XX:+ExitOnOutOfMemoryError
       -XX:+CrashOnOutOfMemoryError
       -Djava.security.egd=file:/dev/./urandom
+      -Dnetworkaddress.cache.ttl=30
+      -Dnetworkaddress.cache.negative.ttl=10
     "
 
     EXEC_JAVA_OPTS="${DEFAULT_JVM_OPTS} ${JAVA_OPTS:-}"

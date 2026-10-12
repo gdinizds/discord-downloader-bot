@@ -71,11 +71,13 @@ graalvmNative {
             imageName = 'discord-downloader-bot'
             mainClass = 'dev.gdiniz.discorddownloaderbot.DiscordDownloaderBotApplication'
             buildArgs.addAll(
+                    '-O3',
                     '--no-fallback',
                     '--enable-preview',
                     '-H:+ReportExceptionStackTraces',
                     '-H:+UnlockExperimentalVMOptions',
                     '-march=compatibility',
+                    '--enable-monitoring=heapdump,threaddump,jfr',
                     '--initialize-at-build-time=org.slf4j.LoggerFactory,ch.qos.logback'
             )
         }
