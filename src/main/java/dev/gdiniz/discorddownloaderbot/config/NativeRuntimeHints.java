@@ -31,8 +31,20 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
                 "classpath*:dev/gdiniz/discorddownloaderbot/**/*.class",
                 "classpath*:org/flywaydb/**/*.class",
                 "classpath*:org/hibernate/**/*_$*.class",
+                "classpath*:org/hibernate/event/**/*.class",
+                "classpath*:org/hibernate/boot/models/**/*.class",
+                "classpath*:org/hibernate/annotations/**/*.class",
+                "classpath*:org/hibernate/generator/**/*.class",
+                "classpath*:org/hibernate/id/**/*.class",
+                "classpath*:org/hibernate/persister/**/*.class",
+                "classpath*:org/hibernate/metamodel/**/*.class",
+                "classpath*:org/hibernate/property/**/*.class",
+                "classpath*:org/hibernate/tuple/**/*.class",
+                "classpath*:org/hibernate/dialect/**/*.class",
+                "classpath*:jakarta/persistence/**/*.class",
                 "classpath*:org/jboss/**/*_$*.class",
                 "classpath*:org/springframework/cloud/consul/model/**/*.class",
+                "classpath*:org/springframework/dao/**/*.class",
                 "classpath*:com/ecwid/consul/**/*.class",
                 "classpath*:net/jpountz/**/*.class",
                 "classpath*:io/github/resilience4j/**/*.class",
@@ -91,8 +103,10 @@ public class NativeRuntimeHints implements RuntimeHintsRegistrar {
         Class<?> current = clazz;
         while (current != null && current != Object.class && !current.isPrimitive()) {
             hints.reflection().registerType(current, MemberCategory.values());
+            hints.reflection().registerType(current.arrayType(), MemberCategory.values());
             for (Class<?> iface : current.getInterfaces()) {
                 hints.reflection().registerType(iface, MemberCategory.values());
+                hints.reflection().registerType(iface.arrayType(), MemberCategory.values());
             }
             current = current.getSuperclass();
         }
