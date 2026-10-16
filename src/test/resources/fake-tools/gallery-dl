@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import time
 
 args = sys.argv[1:]
 here = os.path.dirname(os.path.abspath(__file__))
@@ -15,8 +16,19 @@ if "--version" in args:
     sys.exit(0)
 
 target = args[-1] if args else ""
+if "sleep" in target:
+    time.sleep(30)
+
 if "private" in target:
     sys.stderr.write("ERROR: [twitter] 401 Unauthorized / Private account\n")
+    sys.exit(1)
+
+if "ratelimit" in target:
+    sys.stderr.write("ERROR: [Instagram] abc: Requested content is not available, rate-limit reached or login required. Use --cookies\n")
+    sys.exit(1)
+
+if "broken" in target:
+    sys.stderr.write("ERROR: HTTP Error 503: Service Unavailable\n")
     sys.exit(1)
 
 out_dir = "."
@@ -25,11 +37,20 @@ for i, a in enumerate(args):
         out_dir = args[i + 1]
 
 os.makedirs(out_dir, exist_ok=True)
+
+if "--cookies" in args:
+    cookie_path = args[args.index("--cookies") + 1]
+    with open(cookie_path, "a") as jar:
+        jar.write("# accessed by gallery-dl\n")
+
 with open(os.path.join(out_dir, "gallery_photo.jpg"), "wb") as f:
     f.write(b"\0" * 1024)
 
 if "--write-metadata" in args or "--write-info-json" in args:
     with open(os.path.join(out_dir, "info.json"), "w", encoding="utf-8") as f:
-        f.write(json.dumps({"content": "Sample Post Title"}))
+        title = "Sample Post Title"
+        if "utf8" in target:
+            title = "Virou programador, deve tá rico agora 🤡💻 #viral"
+        f.write(json.dumps({"content": title}))
 
 sys.exit(0)

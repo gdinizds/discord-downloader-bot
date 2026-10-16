@@ -163,7 +163,7 @@ resilience4j:
         maxConcurrentCalls: ${BULKHEAD_YTDLP_MAX_CONCURRENT:15}
         maxWaitDuration: ${BULKHEAD_YTDLP_MAX_WAIT:30s}
       gallerydlBulkhead:
-        maxConcurrentCalls: ${BULKHEAD_GALLERYDL_MAX_CONCURRENT:15}
+        maxConcurrentCalls: ${BULKHEAD_GALLERYDL_MAX_CONCURRENT:${BULKHEAD_YTDLP_MAX_CONCURRENT:15}}
         maxWaitDuration: ${BULKHEAD_GALLERYDL_MAX_WAIT:30s}
       ffmpegBulkhead:
         maxConcurrentCalls: ${BULKHEAD_FFMPEG_MAX_CONCURRENT:8}

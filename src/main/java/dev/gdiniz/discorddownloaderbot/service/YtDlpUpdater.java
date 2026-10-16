@@ -14,20 +14,20 @@ public class YtDlpUpdater {
 
     @Scheduled(cron = "${downloader.ytdlp-update-cron:0 0 4 * * *}")
     public void update() {
-        log.info("Checking for yt-dlp updates...");
+        log.info("Checking for yt-dlp and gallery-dl updates...");
         try {
             var process = new ProcessBuilder(
                     "pip3", "install", "--no-cache-dir", "--break-system-packages", "--quiet",
-                    "-U", "yt-dlp[default,curl-cffi]")
+                    "-U", "yt-dlp[default,curl-cffi]", "gallery-dl")
                     .redirectErrorStream(true)
                     .start();
             String output = new String(process.getInputStream().readAllBytes());
             int exitCode = process.waitFor();
 
             if (exitCode == 0) {
-                log.info("yt-dlp update check completed successfully");
+                log.info("yt-dlp and gallery-dl update check completed successfully");
             } else {
-                log.warn("yt-dlp update failed (exit {}): {}", exitCode, output);
+                log.warn("Tools update failed (exit {}): {}", exitCode, output);
             }
         } catch (IOException e) {
             log.warn("yt-dlp update failed to start", e);

@@ -56,7 +56,6 @@ public class DownloadOrchestrator implements DisposableBean {
 
     private record CachedSource(Optional<DownloadSource> source, long loadedAt) {}
 
-    private final YtDlpService ytDlpService;
     private final GalleryDlService galleryDlService;
     private final DirectMediaDownloadService directDownloadService;
     private final FfmpegService ffmpegService;
@@ -76,8 +75,7 @@ public class DownloadOrchestrator implements DisposableBean {
     private final Object drainLock = new Object();
 
     @Autowired
-    public DownloadOrchestrator(YtDlpService ytDlpService,
-                                GalleryDlService galleryDlService,
+    public DownloadOrchestrator(GalleryDlService galleryDlService,
                                 DirectMediaDownloadService directDownloadService,
                                 FfmpegService ffmpegService,
                                 S3UploadService s3UploadService,
@@ -88,7 +86,6 @@ public class DownloadOrchestrator implements DisposableBean {
                                 DownloaderProperties properties,
                                 MeterRegistry meterRegistry,
                                 UrlPolicy urlPolicy) {
-        this.ytDlpService = ytDlpService;
         this.galleryDlService = galleryDlService;
         this.directDownloadService = directDownloadService;
         this.ffmpegService = ffmpegService;
@@ -103,8 +100,7 @@ public class DownloadOrchestrator implements DisposableBean {
         meterRegistry.gauge("downloader.job.in_flight", inFlight);
     }
 
-    public DownloadOrchestrator(YtDlpService ytDlpService,
-                                FfmpegService ffmpegService,
+    public DownloadOrchestrator(FfmpegService ffmpegService,
                                 S3UploadService s3UploadService,
                                 DownloadSourceRepository sourceRepository,
                                 DownloadJobRepository jobRepository,
@@ -113,9 +109,8 @@ public class DownloadOrchestrator implements DisposableBean {
                                 DownloaderProperties properties,
                                 MeterRegistry meterRegistry,
                                 UrlPolicy urlPolicy) {
-        this(ytDlpService,
-                new GalleryDlService(properties),
-                new DirectMediaDownloadService(properties),
+        this(new GalleryDlService(properties),
+                new DirectMediaDownloadService(properties, urlPolicy),
                 ffmpegService,
                 s3UploadService,
                 sourceRepository,
@@ -227,59 +222,44 @@ public class DownloadOrchestrator implements DisposableBean {
 
             var source = resolveSource(host);
 
-            var probe = ytDlpService.probe(request, source);
-            if (probe.hasSizeInfo() && probe.fileSizeBytes() > maxFileBytes) {
-                double sizeMb  = probe.fileSizeBytes() / 1_048_576.0;
-                double limitMb = maxFileBytes / 1_048_576.0;
-                if (!ffmpegService.canFitInSize(probe.durationSeconds(), maxFileBytes)) {
-                    var msg = "❌ O arquivo tem aproximadamente **%.1f MB** e não é possível comprimir para o limite de **%.0f MB** deste servidor."
-                            .formatted(sizeMb, limitMb);
-                    replied.set(true);
-                    responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
-                    job.markFailed("Pre-validation: %.1f MB > limit %.0f MB, uncompressible".formatted(sizeMb, limitMb));
-                    jobRepository.save(job);
-                    countFailure(host, request, "too_large");
-                    return;
-                }
-                log.info("File (~{}MB) exceeds limit ({}MB) but compression is feasible — proceeding: correlationId={}",
-                        (int) sizeMb, (int) limitMb, request.correlationId());
-            } else if (!probe.hasSizeInfo() && probe.durationSeconds() > 0
-                    && !ffmpegService.canFitInSize(probe.durationSeconds(), maxFileBytes)) {
-                double limitMb   = maxFileBytes / 1_048_576.0;
-                int durationMin  = (int) (probe.durationSeconds() / 60);
-                var msg = "❌ O conteúdo tem **%d min** de duração e não é possível comprimir para o limite de **%.0f MB** deste servidor."
-                        .formatted(durationMin, limitMb);
-                replied.set(true);
-                responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
-                job.markFailed("Pre-validation: %dmin duration uncompressible to %.0f MB".formatted(durationMin, limitMb));
-                jobRepository.save(job);
-                countFailure(host, request, "too_long");
-                return;
-            }
-
             job.markDownloading();
             jobRepository.save(job);
 
             DownloadResult result;
-            try {
-                result = ytDlpService.execute(request, source, probe);
-            } catch (DownloadException ytdlpErr) {
-                if (timedOut.get() || ytdlpErr instanceof DownloadInterruptedException || ytdlpErr instanceof SourceBlockedException) {
-                    throw ytdlpErr;
-                }
-                log.info("yt-dlp failed, attempting gallery-dl: correlationId={} error={}",
-                        request.correlationId(), ytdlpErr.getMessage());
+            boolean isDirect = directDownloadService.isDirectMediaUrl(request.url());
+            if (isDirect) {
+                log.info("Direct media URL detected, taking fast-path: correlationId={} url={}",
+                        request.correlationId(), request.url());
                 try {
-                    result = galleryDlService.execute(request, source);
-                } catch (Exception galleryErr) {
-                    if (timedOut.get() || galleryErr instanceof DownloadInterruptedException || galleryErr instanceof SourceBlockedException) {
+                    result = directDownloadService.download(request, maxFileBytes);
+                } catch (Exception directErr) {
+                    if (timedOut.get() || directErr instanceof DownloadInterruptedException || directErr instanceof SourceBlockedException) {
+                        throw directErr;
+                    }
+                    log.info("Direct fast-path failed, attempting gallery-dl: correlationId={} error={}",
+                            request.correlationId(), directErr.getMessage());
+                    result = galleryDlService.execute(request, source, maxFileBytes);
+                }
+            } else {
+                try {
+                    result = galleryDlService.execute(request, source, maxFileBytes);
+                } catch (DownloadException galleryErr) {
+                    if (timedOut.get()
+                            || galleryErr instanceof DownloadInterruptedException
+                            || galleryErr instanceof SourceBlockedException
+                            || galleryErr instanceof ContentUnavailableException) {
                         throw galleryErr;
                     }
+                    log.info("gallery-dl failed, attempting direct download fallback: correlationId={} error={}",
+                            request.correlationId(), galleryErr.getMessage());
                     try {
                         result = directDownloadService.download(request, maxFileBytes);
                     } catch (Exception directErr) {
                         log.error("All downloaders failed: correlationId={}", request.correlationId());
-                        throw ytdlpErr;
+                        throw galleryErr;
+                    }
+                    if (result == null) {
+                        throw galleryErr;
                     }
                 }
             }
@@ -492,7 +472,7 @@ public class DownloadOrchestrator implements DisposableBean {
             sourceCache.put(host, cached);
         }
         return cached.source().orElseGet(() -> {
-            log.warn("No configured source for host '{}' — using generic yt-dlp fallback", host);
+            log.warn("No configured source for host '{}' — using generic fallback", host);
             return DownloadSource.generic(host);
         });
     }

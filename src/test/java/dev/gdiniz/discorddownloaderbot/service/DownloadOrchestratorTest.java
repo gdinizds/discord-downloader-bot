@@ -10,7 +10,6 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.GatewayResponse;
-import dev.gdiniz.discorddownloaderbot.dto.VideoProbe;
 import dev.gdiniz.discorddownloaderbot.kafka.ResponseProducer;
 import dev.gdiniz.discorddownloaderbot.testsupport.FakeTools;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -48,7 +47,6 @@ class DownloadOrchestratorTest {
     @TempDir
     Path tmp;
 
-    private final YtDlpService ytDlp = mock(YtDlpService.class);
     private final GalleryDlService galleryDl = mock(GalleryDlService.class);
     private final DirectMediaDownloadService directDownload = mock(DirectMediaDownloadService.class);
     private final FfmpegService ffmpeg = mock(FfmpegService.class);
@@ -73,14 +71,14 @@ class DownloadOrchestratorTest {
         when(guildConfigs.get(any())).thenReturn(Optional.empty());
         when(sources.findByHostAndEnabledTrue(anyString())).thenReturn(Optional.empty());
         when(ffmpeg.canFitInSize(anyDouble(), anyLong())).thenReturn(true);
+        when(directDownload.isDirectMediaUrl(anyString())).thenReturn(false);
         orchestrator = orchestrator(10);
     }
 
     @Test
     void successfulDownloadRepliesWithAttachmentAndMarksJobDone() throws Exception {
         var file = downloaded("corr-ok", "clip.mp4", 2048);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "Meu vídeo", 2048, "mp4"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenReturn(new DownloadResult(file, "Meu vídeo", 2048, "mp4"));
         when(s3.upload(any(), eq("guild-1"), eq("corr-ok"), anyInt())).thenReturn("guild-1/corr-ok.mp4");
 
         orchestrator.process(interaction("corr-ok", "https://youtube.com/watch?v=ok"));
@@ -99,20 +97,34 @@ class DownloadOrchestratorTest {
     }
 
     @Test
-    void fallbackToGalleryDlWhenYtDlpFails() throws Exception {
-        var photo = downloaded("corr-gallery", "photo.jpg", 1024);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenThrow(new DownloadException("no video formats found"));
-        when(galleryDl.execute(any(), any())).thenReturn(new DownloadResult(photo, "foto", 1024, "jpg"));
-        when(s3.upload(any(), eq("guild-1"), eq("corr-gallery"), anyInt())).thenReturn("guild-1/corr-gallery.jpg");
+    void directMediaUrlTakesFastPath() throws Exception {
+        var image = downloaded("corr-fast", "image.png", 5000);
+        when(directDownload.isDirectMediaUrl("https://example.com/image.png")).thenReturn(true);
+        when(directDownload.download(any(), anyLong())).thenReturn(new DownloadResult(image, "image", 5000, "png"));
+        when(s3.upload(any(), eq("guild-1"), eq("corr-fast"), anyInt())).thenReturn("guild-1/corr-fast.png");
+        when(ffmpeg.isImage(image)).thenReturn(true);
+
+        orchestrator.process(interaction("corr-fast", "https://example.com/image.png"));
+
+        verifyNoInteractions(galleryDl);
+        verify(directDownload).download(any(), anyLong());
+        assertThat(savedStatuses).last().isEqualTo(DownloadStatus.DONE);
+    }
+
+    @Test
+    void fallbackToDirectDownloadWhenGalleryDlFails() throws Exception {
+        var photo = downloaded("corr-direct", "photo.jpg", 1024);
+        when(galleryDl.execute(any(), any(), anyLong())).thenThrow(new DownloadException("unsupported url"));
+        when(directDownload.download(any(), anyLong())).thenReturn(new DownloadResult(photo, "foto", 1024, "jpg"));
+        when(s3.upload(any(), eq("guild-1"), eq("corr-direct"), anyInt())).thenReturn("guild-1/corr-direct.jpg");
         when(ffmpeg.isImage(photo)).thenReturn(true);
 
-        orchestrator.process(interaction("corr-gallery", "https://twitter.com/user/status/123456"));
+        orchestrator.process(interaction("corr-direct", "https://custom-site.com/photo"));
 
         var last = sentResponses().getLast();
         assertThat(last.finished()).isTrue();
         assertThat(last.attachments()).singleElement().satisfies(att -> {
-            assertThat(att.url()).isEqualTo("http://garage:3900/bucket/guild-1/corr-gallery.jpg");
+            assertThat(att.url()).isEqualTo("http://garage:3900/bucket/guild-1/corr-direct.jpg");
             assertThat(att.name()).isEqualTo("foto.jpg");
         });
         assertThat(savedStatuses).last().isEqualTo(DownloadStatus.DONE);
@@ -125,9 +137,7 @@ class DownloadOrchestratorTest {
         var photo3 = downloaded("corr-multi", "img_3.jpg", 1400);
         var files = List.of(photo1, photo2, photo3);
 
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenThrow(new DownloadException("no video formats found"));
-        when(galleryDl.execute(any(), any())).thenReturn(new DownloadResult(photo1, "album", 3600, "jpg", files));
+        when(galleryDl.execute(any(), any(), anyLong())).thenReturn(new DownloadResult(photo1, "album", 3600, "jpg", files));
         when(ffmpeg.isImage(any())).thenReturn(true);
         when(s3.upload(eq(photo1), eq("guild-1"), eq("corr-multi"), eq(0))).thenReturn("guild-1/corr-multi.jpg");
         when(s3.upload(eq(photo2), eq("guild-1"), eq("corr-multi"), eq(1))).thenReturn("guild-1/corr-multi_1.jpg");
@@ -147,8 +157,7 @@ class DownloadOrchestratorTest {
     @Test
     void unexpectedErrorStillAnswersTheUserAndFailsTheJob() throws Exception {
         var file = downloaded("corr-boom", "clip.mp4", 2048);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "clip", 2048, "mp4"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenReturn(new DownloadResult(file, "clip", 2048, "mp4"));
         when(s3.upload(any(), any(), any(), anyInt())).thenThrow(new IllegalStateException("socket closed"));
 
         orchestrator.process(interaction("corr-boom", "https://youtube.com/watch?v=ok"));
@@ -162,14 +171,14 @@ class DownloadOrchestratorTest {
     @Test
     void internalUrlsAreRejectedBeforeAnyWork() {
         var policy = new UrlPolicy(host -> new InetAddress[]{InetAddress.getByAddress(host, new byte[]{10, 0, 0, 1})});
-        var strict = new DownloadOrchestrator(ytDlp, galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
+        var strict = new DownloadOrchestrator(galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
                 FakeTools.properties(tmp, tmp.resolve("work"), 10), new SimpleMeterRegistry(), policy);
 
         strict.process(interaction("corr-ssrf", "http://internal.example/admin"));
 
         assertThat(sentResponses()).singleElement()
                 .extracting(GatewayResponse::content).isEqualTo(DownloadOrchestrator.MSG_INVALID_URL);
-        verifyNoInteractions(ytDlp, s3);
+        verifyNoInteractions(galleryDl, s3);
         verify(jobs, never()).save(any());
     }
 
@@ -179,13 +188,13 @@ class DownloadOrchestratorTest {
 
         orchestrator.process(interaction("corr-dup", "https://youtube.com/watch?v=ok"));
 
-        verifyNoInteractions(ytDlp, responses);
+        verifyNoInteractions(galleryDl, responses);
         verify(jobs, never()).save(any());
     }
 
     @Test
     void unavailableContentGetsASpecificMessage() {
-        when(ytDlp.probe(any(), any())).thenThrow(new ContentUnavailableException("private video"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenThrow(new ContentUnavailableException("private video"));
 
         orchestrator.process(interaction("corr-private", "https://youtube.com/watch?v=private"));
 
@@ -207,7 +216,7 @@ class DownloadOrchestratorTest {
 
     @Test
     void messageCommandEditsTheProgressMessageOnceAnnounced() {
-        when(ytDlp.probe(any(), any())).thenThrow(new ContentUnavailableException("removed"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenThrow(new ContentUnavailableException("removed"));
 
         orchestrator.process(messageCommand("corr-edit", "https://youtube.com/watch?v=gone"));
 
@@ -219,8 +228,7 @@ class DownloadOrchestratorTest {
     @Test
     void processingTimeoutInterruptsTheWorkerAndTellsTheUser() {
         var quick = orchestrator(1);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenAnswer(inv -> {
+        when(galleryDl.execute(any(), any(), anyLong())).thenAnswer(inv -> {
             try {
                 TimeUnit.SECONDS.sleep(30);
             } catch (InterruptedException e) {
@@ -241,8 +249,7 @@ class DownloadOrchestratorTest {
     @Test
     void imagesAboveTheLimitAreNotCompressed() throws Exception {
         var image = downloaded("corr-img", "photo.jpg", 30_000_000);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(image, "photo", 30_000_000, "jpg"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenReturn(new DownloadResult(image, "photo", 30_000_000, "jpg"));
         when(ffmpeg.isImage(image)).thenReturn(true);
 
         orchestrator.process(interaction("corr-img", "https://youtube.com/watch?v=img"));
@@ -255,8 +262,7 @@ class DownloadOrchestratorTest {
     void workDirectoryIsRemovedAfterProcessing() throws Exception {
         var file = downloaded("corr-clean", "clip.mp4", 10);
         var workDir = file.getParent();
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
-        when(ytDlp.execute(any(), any(), any())).thenReturn(new DownloadResult(file, "clip", 10, "mp4"));
+        when(galleryDl.execute(any(), any(), anyLong())).thenReturn(new DownloadResult(file, "clip", 10, "mp4"));
         when(s3.upload(any(), any(), any(), anyInt())).thenReturn("key");
 
         orchestrator.process(interaction("corr-clean", "https://youtube.com/watch?v=ok"));
@@ -267,11 +273,10 @@ class DownloadOrchestratorTest {
     @Test
     void shutdownWaitsForInFlightDownloads() throws Exception {
         var release = new java.util.concurrent.CountDownLatch(1);
-        when(ytDlp.probe(any(), any())).thenReturn(VideoProbe.unknown());
         doAnswer(inv -> {
             release.await(5, TimeUnit.SECONDS);
             throw new ContentUnavailableException("gone");
-        }).when(ytDlp).execute(any(), any(), any());
+        }).when(galleryDl).execute(any(), any(), anyLong());
 
         var worker = Thread.ofVirtual().start(() ->
                 orchestrator.process(interaction("corr-drain", "https://youtube.com/watch?v=ok")));
@@ -290,7 +295,7 @@ class DownloadOrchestratorTest {
     }
 
     private DownloadOrchestrator orchestrator(int timeoutSeconds) {
-        return new DownloadOrchestrator(ytDlp, galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
+        return new DownloadOrchestrator(galleryDl, directDownload, ffmpeg, s3, sources, jobs, guildConfigs, responses,
                 FakeTools.properties(tmp, tmp.resolve("work"), timeoutSeconds), new SimpleMeterRegistry(), urlPolicy);
     }
 

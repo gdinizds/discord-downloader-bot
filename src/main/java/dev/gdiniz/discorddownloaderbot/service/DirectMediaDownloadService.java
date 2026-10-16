@@ -36,15 +36,24 @@ public class DirectMediaDownloadService {
             "mp3", "m4a", "ogg", "opus", "wav", "flac", "aac"
     );
 
+    private static final int MAX_REDIRECT_HOPS = 5;
+
     private final DownloaderProperties properties;
+    private final UrlPolicy urlPolicy;
     private final HttpClient httpClient;
 
-    public DirectMediaDownloadService(DownloaderProperties properties) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public DirectMediaDownloadService(DownloaderProperties properties, UrlPolicy urlPolicy) {
         this.properties = properties;
+        this.urlPolicy = urlPolicy != null ? urlPolicy : new UrlPolicy();
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
+    }
+
+    public DirectMediaDownloadService(DownloaderProperties properties) {
+        this(properties, new UrlPolicy());
     }
 
     public boolean isDirectMediaUrl(String url) {
@@ -71,61 +80,121 @@ public class DirectMediaDownloadService {
 
         log.info("Attempting direct HTTP download: correlationId={} url={}", request.correlationId(), request.url());
 
-        var httpRequest = HttpRequest.newBuilder()
-                .uri(URI.create(request.url()))
-                .timeout(Duration.ofSeconds(Math.max(1, properties.processingTimeoutSeconds())))
-                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
-                .GET()
-                .build();
+        URI currentUri = URI.create(request.url());
+        HttpResponse<InputStream> response = null;
+        int redirects = 0;
 
-        HttpResponse<InputStream> response;
         try {
-            response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new DownloadInterruptedException("Direct download interrupted", e);
-        } catch (IOException e) {
-            throw new DownloadException("Direct download network error: " + e.getMessage(), e);
-        }
+            while (true) {
+                var httpRequest = HttpRequest.newBuilder()
+                        .uri(currentUri)
+                        .timeout(Duration.ofSeconds(Math.max(1, properties.processingTimeoutSeconds())))
+                        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+                        .GET()
+                        .build();
 
-        int status = response.statusCode();
-        if (status == 404 || status == 410) {
-            throw new ContentUnavailableException("Direct download returned HTTP " + status);
-        }
-        if (status == 401 || status == 403 || status == 429) {
-            throw new SourceBlockedException("Direct download returned HTTP " + status);
-        }
-        if (status >= 400) {
-            throw new DownloadException("Direct download failed with HTTP status " + status);
-        }
-
-        String contentType = response.headers().firstValue("Content-Type").orElse("").toLowerCase(Locale.ROOT);
-        String filename = deriveFilename(request.url(), response);
-        Path targetFile = outputDir.resolve(filename);
-
-        long written = 0;
-        try (InputStream in = response.body();
-             OutputStream out = Files.newOutputStream(targetFile)) {
-            byte[] buffer = new byte[8192];
-            int read;
-            while ((read = in.read(buffer)) != -1) {
-                written += read;
-                if (written > maxBytes * 2) { // cap at 2x server limit to avoid unlimited streaming
-                    throw new DownloadException("Direct download stream exceeded maximum limit");
+                try {
+                    response = httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new DownloadInterruptedException("Direct download interrupted", e);
+                } catch (IOException e) {
+                    throw new DownloadException("Direct download network error: " + e.getMessage(), e);
                 }
-                out.write(buffer, 0, read);
+
+                int status = response.statusCode();
+                if (isRedirect(status)) {
+                    if (++redirects > MAX_REDIRECT_HOPS) {
+                        closeQuietly(response);
+                        throw new DownloadException("Direct download exceeded maximum redirect hops (" + MAX_REDIRECT_HOPS + ")");
+                    }
+                    String location = response.headers().firstValue("Location").orElse(null);
+                    closeQuietly(response);
+                    if (location == null || location.isBlank()) {
+                        throw new DownloadException("Direct download received redirect status " + status + " without Location header");
+                    }
+                    URI nextUri;
+                    try {
+                        nextUri = currentUri.resolve(location);
+                    } catch (IllegalArgumentException e) {
+                        throw new DownloadException("Direct download invalid redirect URI: " + location, e);
+                    }
+                    String nextUrl = nextUri.toString();
+                    var rejection = urlPolicy.rejectionReason(nextUrl);
+                    if (rejection.isPresent()) {
+                        log.warn("Direct download redirect rejected by UrlPolicy: correlationId={} nextUrl={} reason={}",
+                                request.correlationId(), nextUrl, rejection.get());
+                        throw new DownloadException("Direct download redirect blocked: " + rejection.get());
+                    }
+                    currentUri = nextUri;
+                    continue;
+                }
+
+                if (status == 404 || status == 410) {
+                    closeQuietly(response);
+                    throw new ContentUnavailableException("Direct download returned HTTP " + status);
+                }
+                if (status == 401 || status == 403 || status == 429) {
+                    closeQuietly(response);
+                    throw new SourceBlockedException("Direct download returned HTTP " + status);
+                }
+                if (status >= 400) {
+                    closeQuietly(response);
+                    throw new DownloadException("Direct download failed with HTTP status " + status);
+                }
+
+                break;
             }
-        } catch (IOException e) {
-            throw new DownloadException("Failed writing downloaded stream to disk", e);
+
+            var contentLengthHeader = response.headers().firstValueAsLong("Content-Length");
+            if (contentLengthHeader.isPresent() && contentLengthHeader.getAsLong() > maxBytes * 2) {
+                closeQuietly(response);
+                throw new DownloadException("Direct download Content-Length (" + contentLengthHeader.getAsLong()
+                        + ") exceeds maximum limit (" + (maxBytes * 2) + ")");
+            }
+
+            String filename = deriveFilename(currentUri.toString(), response);
+            Path targetFile = outputDir.resolve(filename);
+
+            long written = 0;
+            try (InputStream in = response.body();
+                 OutputStream out = Files.newOutputStream(targetFile)) {
+                byte[] buffer = new byte[8192];
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    written += read;
+                    if (written > maxBytes * 2) {
+                        throw new DownloadException("Direct download stream exceeded maximum limit");
+                    }
+                    out.write(buffer, 0, read);
+                }
+            } catch (IOException e) {
+                throw new DownloadException("Failed writing downloaded stream to disk", e);
+            }
+
+            String ext = getExtension(filename);
+            String title = filename.contains(".") ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+
+            log.info("Direct HTTP download completed: correlationId={} file={} size={}",
+                    request.correlationId(), filename, written);
+
+            return new DownloadResult(targetFile, title, written, ext, List.of(targetFile));
+        } catch (Exception e) {
+            closeQuietly(response);
+            throw e;
         }
+    }
 
-        String ext = getExtension(filename);
-        String title = filename.contains(".") ? filename.substring(0, filename.lastIndexOf('.')) : filename;
+    private static boolean isRedirect(int status) {
+        return status == 301 || status == 302 || status == 303 || status == 307 || status == 308;
+    }
 
-        log.info("Direct HTTP download completed: correlationId={} file={} size={}",
-                request.correlationId(), filename, written);
-
-        return new DownloadResult(targetFile, title, written, ext, List.of(targetFile));
+    private static void closeQuietly(HttpResponse<InputStream> response) {
+        if (response != null && response.body() != null) {
+            try {
+                response.body().close();
+            } catch (Exception ignored) {}
+        }
     }
 
     private String deriveFilename(String url, HttpResponse<?> response) {

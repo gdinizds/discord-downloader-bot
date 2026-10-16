@@ -17,10 +17,10 @@ import io.opentelemetry.api.trace.Span;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -40,25 +40,54 @@ public class GalleryDlService {
     private static final JsonMapper JSON = JsonMapper.builder().build();
 
     private static final Set<String> COOKIE_FLAGS = Set.of("--cookies", "--cookies-from-browser");
+    private static final Set<String> MANAGED_FLAGS = Set.of("--no-playlist", "--no-progress");
+    private static final Set<String> YOUTUBE_HOSTS = Set.of("youtube.com", "youtu.be", "m.youtube.com");
 
     private static final List<String> UNAVAILABLE_MARKERS = List.of(
+            "video unavailable",
+            "private video",
+            "this video is private",
+            "this account is private",
+            "this tweet is from a private account",
+            "has been removed",
+            "this post has been deleted",
+            "no longer available",
             "http error 404",
-            "http error 401",
+            "http error 410",
+            "tweet not found",
+            "post not found",
             "not found",
             "does not exist",
             "private account",
             "post deleted",
             "content deleted",
-            "user has deleted this post"
+            "user has deleted this post",
+            "no video formats found",
+            "no video could be found",
+            "there is no video in this post",
+            "there is no video in this tweet",
+            "unsupported url",
+            "is not a valid url",
+            "no media found"
     );
 
     private static final List<String> BLOCKED_MARKERS = List.of(
-            "http error 429",
+            "rate-limit reached",
+            "rate limit reached",
             "rate-limit",
             "rate limit",
             "login required",
+            "log in to",
+            "sign in to confirm",
+            "http error 429",
+            "http error 401",
+            "http error 403",
+            "too many requests",
+            "checkpoint_required",
             "checkpoint required",
-            "challenge required"
+            "challenge required",
+            "cookies are no longer valid",
+            "account has been flagged"
     );
 
     private final DownloaderProperties properties;
@@ -67,10 +96,18 @@ public class GalleryDlService {
         this.properties = properties;
     }
 
+    public DownloadResult execute(DownloadRequest request, DownloadSource source) throws DownloadException {
+        return execute(request, source, properties.discordMaxFileBytes());
+    }
+
     @CircuitBreaker(name = "gallerydl", fallbackMethod = "galleryDlFallback")
     @Retry(name = "gallerydlRetry")
     @Bulkhead(name = "gallerydlBulkhead")
-    public DownloadResult execute(DownloadRequest request, DownloadSource source) throws DownloadException {
+    public DownloadResult execute(DownloadRequest request, DownloadSource source, long maxBytes) throws DownloadException {
+        if (Thread.currentThread().isInterrupted()) {
+            throw new DownloadInterruptedException("gallery-dl skipped — processing timed out", null);
+        }
+
         Path outputDir = Path.of(properties.tmpDir(), request.correlationId());
         try {
             Files.createDirectories(outputDir);
@@ -84,15 +121,51 @@ public class GalleryDlService {
         cmd.add(outputDir.toString());
         cmd.add("-D");
         cmd.add("");
+        cmd.add("--range");
+        cmd.add("1-10");
         cmd.add("--write-metadata");
         cmd.add("--write-info-json");
 
-        addCookiesIfPresent(cmd, source.getExtraArgs(), outputDir);
+        // Enable unified ytdl (yt-dlp) integration
+        cmd.add("-o");
+        cmd.add("extractor.ytdl.enabled=true");
+        cmd.add("-o");
+        cmd.add("extractor.ytdl.module=yt_dlp");
+        cmd.add("-o");
+        cmd.add("downloader.ytdl.forward-cookies=true");
 
+        // Format selector
+        String formatSelector = resolveFormatSelector(source != null ? source.getFormatSelector() : null, request.qualidade());
+        if (formatSelector != null && !formatSelector.isBlank()) {
+            cmd.add("-o");
+            cmd.add("extractor.ytdl.format=" + formatSelector);
+        }
+
+        // yt-dlp raw-options for giant video protection and clean outputs
+        long maxFileSize = Math.max(104857600L, maxBytes * 3); // cap at ~75MB-100MB minimum
+        cmd.add("-o");
+        cmd.add("extractor.ytdl.raw-options={\"noplaylist\":true,\"merge_output_format\":\"mp4\",\"max_filesize\":"
+                + maxFileSize + ",\"match_filter\":\"duration <=? 3600\"}");
+
+        // Forward any extra yt-dlp arguments from source
+        List<String> ytdlExtra = extractYtdlExtraArgs(source != null ? source.getExtraArgs() : null);
+        if (!ytdlExtra.isEmpty()) {
+            try {
+                cmd.add("-o");
+                cmd.add("extractor.ytdl.cmdline-args=" + JSON.writeValueAsString(ytdlExtra));
+            } catch (Exception e) {
+                log.warn("Could not serialize ytdl cmdline-args: {}", e.getMessage());
+            }
+        }
+
+        addCookiesIfPresent(cmd, source != null ? source.getExtraArgs() : null, outputDir);
+
+        String targetUrl = resolveTargetUrl(request.url(), source);
         cmd.add("--");
-        cmd.add(request.url());
+        cmd.add(targetUrl);
 
-        log.info("Starting gallery-dl download: correlationId={} url={}", request.correlationId(), request.url());
+        log.info("Starting unified gallery-dl download: correlationId={} url={} target={}",
+                request.correlationId(), request.url(), targetUrl);
         Span.current().setAttribute("gallerydl.url", request.url());
 
         long start = System.currentTimeMillis();
@@ -117,7 +190,7 @@ public class GalleryDlService {
                 long totalSize = files.stream().mapToLong(GalleryDlService::sizeOrZero).sum();
                 String fileName = primaryFile.getFileName().toString();
                 int dotIdx = fileName.lastIndexOf('.');
-                String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "jpg";
+                String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "mp4";
                 String fallbackName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
 
                 String title = extractTitleFromMetadata(outputDir, primaryFile);
@@ -142,6 +215,67 @@ public class GalleryDlService {
         throw new DownloadException("No files downloaded by gallery-dl");
     }
 
+    static String resolveTargetUrl(String url, DownloadSource source) {
+        if (url == null) return "";
+        if (url.startsWith("ytdl:")) return url;
+
+        String host = null;
+        if (source != null && source.getHost() != null) {
+            host = source.getHost().toLowerCase(Locale.ROOT);
+        }
+        if (host == null) {
+            try {
+                var uri = URI.create(url);
+                host = uri.getHost();
+                if (host != null) {
+                    host = host.toLowerCase(Locale.ROOT);
+                    if (host.startsWith("www.")) host = host.substring(4);
+                }
+            } catch (Exception ignored) {}
+        }
+
+        if (host != null && YOUTUBE_HOSTS.contains(host)) {
+            return "ytdl:" + url;
+        }
+        return url;
+    }
+
+    public static String resolveFormatSelector(String tableSelector, String qualidade) {
+        return switch (qualidade) {
+            case "1080p" -> h264Selector(1080);
+            case "720p"  -> h264Selector(720);
+            case "480p"  -> h264Selector(480);
+            case "360p"  -> h264Selector(360);
+            default      -> (tableSelector != null && !tableSelector.isBlank())
+                    ? tableSelector
+                    : DownloadSource.GENERIC_FORMAT_SELECTOR;
+        };
+    }
+
+    public static String h264Selector(int height) {
+        return ("bestvideo[vcodec^=avc1][height<=%1$d]+bestaudio[ext=m4a]"
+                + "/best[vcodec^=avc1][height<=%1$d]"
+                + "/bestvideo[height<=%1$d][ext=mp4]+bestaudio"
+                + "/best[height<=%1$d]"
+                + "/bestaudio"
+                + "/best").formatted(height);
+    }
+
+    static List<String> extractYtdlExtraArgs(String[] extraArgs) {
+        if (extraArgs == null || extraArgs.length == 0) return List.of();
+        List<String> list = new ArrayList<>();
+        for (int i = 0; i < extraArgs.length; i++) {
+            String arg = extraArgs[i];
+            if (MANAGED_FLAGS.contains(arg)) continue;
+            if (COOKIE_FLAGS.contains(arg)) {
+                i++; // skip cookie path
+                continue;
+            }
+            list.add(arg);
+        }
+        return list;
+    }
+
     static List<Path> findDownloadedFiles(Path outputDir) throws IOException {
         try (var stream = Files.list(outputDir)) {
             return stream.filter(Files::isRegularFile)
@@ -159,18 +293,18 @@ public class GalleryDlService {
         return MetadataUtils.readTitleFromJson(jsonPath);
     }
 
-    private static String unescapeHtml(String text) {
-        return MetadataUtils.unescapeHtml(text);
-    }
-
-    private static boolean isMediaCandidate(String name) {
+    static boolean isMediaCandidate(String name) {
         String lower = name.toLowerCase(Locale.ROOT);
-        return !lower.endsWith(".part")
-                && !lower.endsWith(".tmp")
+        return !lower.equals("probe.info.json")
+                && !lower.endsWith(".part")
+                && !lower.endsWith(".ytdl")
                 && !lower.endsWith(".temp")
+                && !lower.endsWith(".tmp")
+                && !lower.endsWith(".info.json")
                 && !lower.endsWith(".json")
                 && !lower.endsWith(".txt")
-                && !lower.endsWith(".aria2");
+                && !lower.endsWith(".aria2")
+                && !lower.contains(".part-frag");
     }
 
     private static long sizeOrZero(Path p) {
@@ -194,36 +328,40 @@ public class GalleryDlService {
             String arg = extraArgs[i];
             if (COOKIE_FLAGS.contains(arg) && i + 1 < extraArgs.length) {
                 Path original = Path.of(extraArgs[++i]);
-                if (Files.exists(original)) {
-                    try {
-                        Path authDir = workDir.resolve(".auth");
-                        Files.createDirectories(authDir);
-                        Path copy = authDir.resolve("cookies.txt");
-                        Files.copy(original, copy, StandardCopyOption.REPLACE_EXISTING);
-                        cmd.add("--cookies");
-                        cmd.add(copy.toString());
-                        return;
-                    } catch (IOException e) {
-                        log.warn("Could not copy cookies for gallery-dl: {}", e.getMessage());
-                        cmd.add("--cookies");
-                        cmd.add(original.toString());
-                        return;
-                    }
-                }
+                Path copy = privateCookieCopy(original, workDir);
+                cmd.add("--cookies");
+                cmd.add(copy.toString());
+                return;
             }
         }
     }
 
-    private static DownloadException classify(String message, String output) {
-        String lower = output.toLowerCase(Locale.ROOT);
-        for (String marker : BLOCKED_MARKERS) {
-            if (lower.contains(marker)) {
-                return new SourceBlockedException(message + ": " + output);
-            }
+    static Path privateCookieCopy(Path shared, Path workDir) {
+        var target = workDir.resolve(".auth").resolve(shared.getFileName());
+        if (Files.exists(target)) return target;
+        if (!Files.isRegularFile(shared)) {
+            log.warn("Cookie file not found, passing it through unchanged: {}", shared);
+            return shared;
         }
+        try {
+            Files.createDirectories(target.getParent());
+            Files.copy(shared, target, StandardCopyOption.REPLACE_EXISTING);
+            return target;
+        } catch (IOException e) {
+            throw new DownloadException("Failed to prepare private cookie file", e);
+        }
+    }
+
+    static DownloadException classify(String message, String output) {
+        String lower = output == null ? "" : output.toLowerCase(Locale.ROOT);
         for (String marker : UNAVAILABLE_MARKERS) {
             if (lower.contains(marker)) {
-                return new ContentUnavailableException(message + ": " + output);
+                return new ContentUnavailableException(message + ": " + marker);
+            }
+        }
+        for (String marker : BLOCKED_MARKERS) {
+            if (lower.contains(marker)) {
+                return new SourceBlockedException(message + ": " + marker);
             }
         }
         return new DownloadException(message + ": " + output);
@@ -233,7 +371,7 @@ public class GalleryDlService {
         return Duration.ofSeconds(Math.max(1, properties.processingTimeoutSeconds()));
     }
 
-    private DownloadResult galleryDlFallback(DownloadRequest request, DownloadSource source, Throwable t) {
+    private DownloadResult galleryDlFallback(DownloadRequest request, DownloadSource source, long maxBytes, Throwable t) {
         if (t instanceof DownloadException downloadException) throw downloadException;
         log.error("gallery-dl circuit breaker open or bulkhead full: correlationId={}", request.correlationId(), t);
         throw new DownloadException("gallery-dl service temporarily unavailable", t);

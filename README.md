@@ -9,7 +9,7 @@
 
 O **discord-downloader-bot** é um microserviço de alta performance, assíncrono e orientado a eventos projetado para processar downloads e transcodificação sob demanda de mídias (vídeos, áudios, imagens, galerias e carrosséis) a partir do ecossistema Discord. Desenvolvido sobre o **Java 25 com Oracle GraalVM (GFTC)** e **Spring Boot 4**, ele adota concorrência massiva baseada em **Virtual Threads (Project Loom)** e comunicação desacoplada via **Kafka / Redpanda**.
 
-O bot conta com um **pipeline triplo de extração com fallback automático** (`yt-dlp` ➔ `gallery-dl` ➔ `Direct HTTP Streaming`), transcodificação adaptativa inteligente e compressão orientada a tamanho alvo via **FFmpeg**, isolamento de credenciais por job, proteção corporativa **anti-SSRF** e resiliência multicamadas com **Resilience4j**.
+O bot conta com uma **arquitetura de download em 2 camadas** (`GalleryDlService` como motor principal unificado com backend `yt-dlp` ➔ `DirectMediaDownloadService` como fallback e fast-path de URLs diretas), transcodificação adaptativa inteligente e compressão orientada a tamanho alvo via **FFmpeg**, isolamento de credenciais por job, proteção corporativa **anti-SSRF** com acompanhamento estrito de redirecionamentos e resiliência multicamadas com **Resilience4j**.
 
 ---
 
@@ -45,9 +45,8 @@ graph TD
         end
 
         subgraph Extraction & Processing Pipeline
-            YTS[YtDlpService - Probe & H.264]
-            GLS[GalleryDlService - Galerias & Metadados]
-            DMS[DirectMediaDownloadService - HTTP Stream]
+            GLS[GalleryDlService - Motor Unificado]
+            DMS[DirectMediaDownloadService - Fast-Path & HTTP Stream]
             FFS[FfmpegService - Transcode & EncodeToSize]
             S3S[S3UploadService - AWS SDK v2]
         end
@@ -63,8 +62,8 @@ graph TD
     subgraph External Services & Storage
         PG[(PostgreSQL - Schema downloader)]
         S3[(Garage S3 / AWS S3 Storage)]
-        CLI_YT[yt-dlp + curl-cffi + Deno]
         CLI_GL[gallery-dl CLI]
+        CLI_YT[yt-dlp (Backend extractor.ytdl)]
         CLI_FF[FFmpeg / FFprobe]
     end
 
@@ -90,13 +89,12 @@ graph TD
     CFG_REPO --> PG
 
     %% Pipeline flow
-    DO --> YTS
-    YTS --> CLI_YT
-    YTS -.->|Fallback em falha| GLS
+    DO -->|Fast-Path se URL direta| DMS
+    DO -->|Download unificado padrão| GLS
     GLS --> CLI_GL
-    GLS -.->|Fallback em falha| DMS
+    CLI_GL -.->|extractor.ytdl sob demanda| CLI_YT
+    GLS -.->|Fallback em falha de extração| DMS
     
-    YTS --> FFS
     GLS --> FFS
     DMS --> FFS
     FFS --> CLI_FF
@@ -129,7 +127,7 @@ sequenceDiagram
     participant Policy as UrlPolicy (Anti-SSRF)
     participant Orch as DownloadOrchestrator
     participant DB as PostgreSQL
-    participant Downloader as Pipeline (yt-dlp / gallery-dl / Direct)
+    participant Downloader as Pipeline (GalleryDlService / DirectDownload)
     participant FFmpeg as FfmpegService
     participant S3 as Garage S3 Storage
 
@@ -156,18 +154,16 @@ sequenceDiagram
     end
 
     rect rgb(245, 255, 245)
-    Note over Orch,Downloader: 3. Pipeline Triplo de Extração com Fallback
-    Orch->>Downloader: Executa Probe no yt-dlp (estimativa de tamanho e duração)
-    alt Tamanho/Duração excede limite e não é comprimível
-        Orch->>Kafka: Publica erro amigável de tamanho excedido
-        Orch->>DB: Atualiza job para FAILED
-    else Viável para download
+    Note over Orch,Downloader: 3. Pipeline de Extração em 2 Camadas
+    alt URL é link direto de mídia (.mp4, .jpg, etc.)
+        Orch->>Downloader: Fast-Path imediato via DirectMediaDownloadService
+        Downloader->>Downloader: Validação de saltos de redirect (anti-SSRF) e Content-Length
+    else URL de plataforma ou galeria
+        Orch->>Downloader: GalleryDlService (Motor Unificado)
         Downloader->>Downloader: Cria cópia isolada de cookies (.auth) no workspace
-        opt Tentativa 1: yt-dlp falha (e não é bloqueio permanente)
-            Downloader->>Downloader: Tentativa 2: gallery-dl (carrosséis, posts sociais)
-            opt Tentativa 2: gallery-dl falha
-                Downloader->>Downloader: Tentativa 3: DirectMediaDownloadService (streaming HTTP direto)
-            end
+        Downloader->>Downloader: Executa gallery-dl com backend extractor.ytdl (yt-dlp)
+        opt Falha de extração genérica
+            Downloader->>Downloader: Fallback para DirectMediaDownloadService
         end
     end
     Downloader-->>Orch: Retorna DownloadResult (arquivos baixados + metadados)
@@ -201,13 +197,12 @@ sequenceDiagram
 
 ## 🛠️ Pipeline de Extração e Ferramentas
 
-O microserviço combina múltiplos utilitários especializados com mecanismos de fallback ordenados para maximizar a taxa de sucesso de download:
+O microserviço combina múltiplos utilitários especializados com uma arquitetura de 2 camadas otimizada para máxima taxa de sucesso de download:
 
 | Ferramenta / Serviço | Especialidade | Mecanismo & Otimizações | Resiliência & Tratamento |
 |---|---|---|---|
-| **`YtDlpService`** | Vídeos de plataformas de streaming (YouTube, TikTok, Twitter/X, Instagram, Reddit, etc.) | - **Pre-probe** de duração e tamanho sem download prévio<br>- Preferência explícita por formatos `avc1/h264` (elimina re-encode)<br>- Isolamento de cookies privados em `.auth`<br>- Suporte a Deno para desafios JS | **CircuitBreaker** (30s) + **Bulkhead** (15 chamadas) + **Retry** (2x com backoff exp). Ignora `SourceBlockedException` e `ContentUnavailableException` |
-| **`GalleryDlService`** | Carrosséis de fotos/vídeos, álbuns e posts em redes sociais | - Extração de múltiplos arquivos por post<br>- Extração de metadados JSON (título e descrição originais)<br>- Cópia privada de cookies por job | **CircuitBreaker** (30s) + **Bulkhead** (15 chamadas) + **Retry** (2x). Acionado automaticamente em caso de falha do yt-dlp |
-| **`DirectMediaDownloadService`** | Mídias com links diretos (`.mp4`, `.mp3`, `.png`, `.jpg`, `.webp`, `.gif`, etc.) | - Streaming HTTP nativo com `java.net.http.HttpClient`<br>- Validação de cabeçalhos `Content-Length`<br>- Interrupção preventiva caso exceda a quota máxima | Timeout configurável por job, proteção anti-SSRF e sem dependência de processos externos |
+| **`GalleryDlService`** | Motor principal unificado: fotos, carrosséis, álbuns e vídeos de redes sociais e streaming (YouTube, TikTok, Twitter/X, Instagram, Reddit, etc.) | - **Backend unificado `yt-dlp`** via `extractor.ytdl.enabled=true` e `extractor.ytdl.module=yt_dlp`<br>- Preferência por formatos `avc1/h264` via `raw-options`<br>- Proteção nativa contra vídeos gigantes via `--max-filesize` e filtro de duração em `raw-options`<br>- Limite seguro de itens em carrosséis (`--range 1-10`) e diretório plano (`-D ""`)<br>- Prefixação transparente `ytdl:` para YouTube e fontes específicas<br>- Cópia privada de cookies por job (`.auth/cookies.txt`) com repasse ao `yt-dlp` (`forward-cookies=true`) | **CircuitBreaker** (30s) + **Bulkhead** (15 chamadas) + **Retry** (2x com backoff exp). Interrupção imediata em `SourceBlockedException` e `ContentUnavailableException` sem retentativas fúteis |
+| **`DirectMediaDownloadService`** | Fast-path para links diretos de mídia e fallback final para URLs simples (`.mp4`, `.mp3`, `.png`, `.jpg`, `.webp`, `.gif`, etc.) | - Fast-Path acionado diretamente antes de invocar subprocessos CLI<br>- Streaming HTTP nativo com `java.net.http.HttpClient` e `Redirect.NEVER`<br>- Acompanhamento manual de até 5 saltos de redirect com re-inspeção DNS/anti-SSRF a cada salto (`UrlPolicy`)<br>- Validação antecipada de `Content-Length` e contagem em fluxo de bytes | Timeout configurável por job, proteção rigorosa anti-SSRF e execução em Virtual Threads sem dependência de processos externos |
 | **`FfmpegService`** | Transcodificação, compressão inteligente e detecção de mídia | - Transcodificação para H.264 / AAC com preset `veryfast`<br>- Cálculo matemático de taxa de bits (`targetVideoBitrate`) para caber na quota do servidor (`encodeToSize`)<br>- Detecção precisa de imagens/áudios para evitar transcode indevido | **CircuitBreaker** (30s) + **Bulkhead** (8 chamadas simultâneas de CPU) |
 | **`S3UploadService`** | Armazenamento de alta performance e disponibilidade | - Upload via AWS SDK v2 para Garage S3 / AWS S3<br>- Chaves estruturadas por Guild e Correlation ID<br>- URLs públicas geradas para entrega no Discord | **CircuitBreaker** (60s) + **Retry** (3x com backoff exponencial) |
 
@@ -231,6 +226,8 @@ Ao receber URLs submetidas por usuários do Discord, o bot aplica validação pr
    - Permite unicamente os esquemas `http` e `https`. Credenciais embutidas na URL (`user:pass@host`) são terminantemente recusadas.
 4. **Sanitização de Formatações Discord**:
    - Remove automaticamente delimitadores de spoiler (`||url||`) e formatações de suppress-embed (`<url>`) comuns no Discord.
+5. **Acompanhamento Seguro de Redirecionamentos HTTP**:
+   - No `DirectMediaDownloadService`, redirects automáticos da JVM estão desativados (`Redirect.NEVER`). O serviço executa saltos manuais limitados a 5 hops, resolvendo URIs relativas e validando cada salto contra a `UrlPolicy` antes da nova requisição, impedindo que servidores externos façam bouncing para redes locais, cloud metadata ou loopback.
 
 ---
 
@@ -309,7 +306,7 @@ O serviço expõe métricas completas no padrão Prometheus e traces via OpenTel
 
 - **Endpoint Prometheus**: `GET /actuator/prometheus`
 - **Distributed Tracing**: Exportação de spans OTLP com amostragem total (`probability: 1.0`) para tracing ponta a ponta.
-- **Health Indicators**: `GET /actuator/health` com verificações ativas de `ffmpeg`, `ytDlp`, `s3` e probes de liveness/readiness.
+- **Health Indicators**: `GET /actuator/health` com verificações ativas de `ffmpeg`, `galleryDl` (que valida tanto `gallery-dl` quanto `yt-dlp`), `s3` e probes de liveness/readiness.
 
 ### Métricas de Negócio Registradas (Micrometer)
 
@@ -341,8 +338,7 @@ O serviço expõe métricas completas no padrão Prometheus e traces via OpenTel
 | `GARAGE_REGION` | `garage` | Região configurada no S3. |
 | `FFMPEG_THREADS` | `2` | Número de threads alocadas para transcodificação de CPU. |
 | `HIKARI_MAX_POOL_SIZE` | `30` | Número máximo de conexões no pool HikariCP. |
-| `BULKHEAD_YTDLP_MAX_CONCURRENT` | `15` | Limite de chamadas simultâneas ao yt-dlp. |
-| `BULKHEAD_GALLERYDL_MAX_CONCURRENT` | `15` | Limite de chamadas simultâneas ao gallery-dl. |
+| `BULKHEAD_GALLERYDL_MAX_CONCURRENT` | `15` | Limite de chamadas simultâneas ao motor unificado gallery-dl (aceita `BULKHEAD_YTDLP_MAX_CONCURRENT` como fallback). |
 | `BULKHEAD_FFMPEG_MAX_CONCURRENT` | `8` | Limite de codificações simultâneas de FFmpeg. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4318/v1/traces` | Endpoint do coletor OpenTelemetry (OTLP). |
 | `SPRING_CLOUD_CONSUL_HOST` | `consul-server.consul.svc.cluster.local` | Host do HashiCorp Consul para externalização de configurações. |
