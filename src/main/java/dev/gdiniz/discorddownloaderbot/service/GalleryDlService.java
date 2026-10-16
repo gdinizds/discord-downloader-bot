@@ -41,7 +41,6 @@ public class GalleryDlService {
 
     private static final Set<String> COOKIE_FLAGS = Set.of("--cookies", "--cookies-from-browser");
     private static final Set<String> MANAGED_FLAGS = Set.of("--no-playlist", "--no-progress");
-    private static final Set<String> YOUTUBE_HOSTS = Set.of("youtube.com", "youtu.be", "m.youtube.com");
 
     private static final List<String> UNAVAILABLE_MARKERS = List.of(
             "video unavailable",
@@ -115,6 +114,44 @@ public class GalleryDlService {
             throw new DownloadException("Failed to create download directory", e);
         }
 
+        String targetUrl = resolveTargetUrl(request.url(), source);
+        var cmd = buildGalleryDlCommand(request, source, maxBytes, outputDir, targetUrl);
+
+        log.info("Starting unified gallery-dl download: correlationId={} url={} target={}",
+                request.correlationId(), request.url(), targetUrl);
+        Span.current().setAttribute("gallerydl.url", request.url());
+
+        long start = System.currentTimeMillis();
+        ProcessRunner.Result result = runProcess(cmd);
+
+        var files = findFilesSafe(outputDir);
+        if (!files.isEmpty()) {
+            return buildResult(outputDir, files, request, start);
+        }
+
+        // If native extractor produced no files and URL wasn't already ytdl-prefixed, retry with ytdl:
+        if (!targetUrl.startsWith("ytdl:")) {
+            log.info("gallery-dl native extraction returned no files, retrying with ytdl backend: correlationId={} url={}",
+                    request.correlationId(), request.url());
+            String fallbackTarget = "ytdl:" + request.url();
+            var fallbackCmd = buildGalleryDlCommand(request, source, maxBytes, outputDir, fallbackTarget);
+            result = runProcess(fallbackCmd);
+            files = findFilesSafe(outputDir);
+            if (!files.isEmpty()) {
+                return buildResult(outputDir, files, request, start);
+            }
+        }
+
+        if (!result.succeeded()) {
+            log.error("gallery-dl failed (exit {}): correlationId={}\n{}",
+                    result.exitCode(), request.correlationId(), result.output());
+            throw classify("gallery-dl exited with code " + result.exitCode(), result.output());
+        }
+
+        throw new DownloadException("No files downloaded by gallery-dl");
+    }
+
+    List<String> buildGalleryDlCommand(DownloadRequest request, DownloadSource source, long maxBytes, Path outputDir, String targetUrl) {
         var cmd = new ArrayList<String>();
         cmd.add(properties.galleryDlPath());
         cmd.add("-d");
@@ -141,37 +178,34 @@ public class GalleryDlService {
             cmd.add("extractor.ytdl.format=" + formatSelector);
         }
 
-        // yt-dlp raw-options for giant video protection and clean outputs
+        // yt-dlp raw-options for giant video protection and clean outputs (primitives only, match_filter is passed via cmdline-args)
         long maxFileSize = Math.max(104857600L, maxBytes * 3); // cap at ~75MB-100MB minimum
         cmd.add("-o");
         cmd.add("extractor.ytdl.raw-options={\"noplaylist\":true,\"merge_output_format\":\"mp4\",\"max_filesize\":"
-                + maxFileSize + ",\"match_filter\":\"duration <=? 3600\"}");
+                + maxFileSize + "}");
 
-        // Forward any extra yt-dlp arguments from source
-        List<String> ytdlExtra = extractYtdlExtraArgs(source != null ? source.getExtraArgs() : null);
-        if (!ytdlExtra.isEmpty()) {
-            try {
-                cmd.add("-o");
-                cmd.add("extractor.ytdl.cmdline-args=" + JSON.writeValueAsString(ytdlExtra));
-            } catch (Exception e) {
-                log.warn("Could not serialize ytdl cmdline-args: {}", e.getMessage());
-            }
+        // Forward duration filter and extra yt-dlp arguments from source via cmdline-args
+        List<String> ytdlExtra = new ArrayList<>();
+        ytdlExtra.add("--match-filter");
+        ytdlExtra.add("duration <=? 3600");
+        ytdlExtra.addAll(extractYtdlExtraArgs(source != null ? source.getExtraArgs() : null));
+        try {
+            cmd.add("-o");
+            cmd.add("extractor.ytdl.cmdline-args=" + JSON.writeValueAsString(ytdlExtra));
+        } catch (Exception e) {
+            log.warn("Could not serialize ytdl cmdline-args: {}", e.getMessage());
         }
 
         addCookiesIfPresent(cmd, source != null ? source.getExtraArgs() : null, outputDir);
 
-        String targetUrl = resolveTargetUrl(request.url(), source);
         cmd.add("--");
         cmd.add(targetUrl);
+        return cmd;
+    }
 
-        log.info("Starting unified gallery-dl download: correlationId={} url={} target={}",
-                request.correlationId(), request.url(), targetUrl);
-        Span.current().setAttribute("gallerydl.url", request.url());
-
-        long start = System.currentTimeMillis();
-        ProcessRunner.Result result;
+    private ProcessRunner.Result runProcess(List<String> cmd) {
         try {
-            result = ProcessRunner.run(cmd, timeout(), MAX_LOG_LINES, true);
+            return ProcessRunner.run(cmd, timeout(), MAX_LOG_LINES, true);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new DownloadInterruptedException("gallery-dl execution interrupted", e);
@@ -180,39 +214,43 @@ public class GalleryDlService {
         } catch (IOException e) {
             throw new DownloadException("gallery-dl process execution failed", e);
         }
+    }
 
+    private static List<Path> findFilesSafe(Path outputDir) {
         try {
-            var files = findDownloadedFiles(outputDir);
-            if (!files.isEmpty()) {
-                var primaryFile = files.stream()
-                        .max(Comparator.comparingLong(GalleryDlService::sizeOrZero))
-                        .orElse(files.getFirst());
-                long totalSize = files.stream().mapToLong(GalleryDlService::sizeOrZero).sum();
-                String fileName = primaryFile.getFileName().toString();
-                int dotIdx = fileName.lastIndexOf('.');
-                String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "mp4";
-                String fallbackName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
-
-                String title = extractTitleFromMetadata(outputDir, primaryFile);
-                if (title == null || title.isBlank()) {
-                    title = fallbackName;
-                }
-
-                log.info("gallery-dl completed in {}ms: correlationId={} files={} totalSize={} title={}",
-                        System.currentTimeMillis() - start, request.correlationId(), files.size(), totalSize, title);
-                return new DownloadResult(primaryFile, title, totalSize, ext, files);
-            }
+            return findDownloadedFiles(outputDir);
         } catch (IOException e) {
-            log.warn("Failed scanning for downloaded files: correlationId={}", request.correlationId(), e);
+            return List.of();
+        }
+    }
+
+    private static DownloadResult buildResult(Path outputDir, List<Path> files, DownloadRequest request, long start) {
+        var primaryFile = files.stream()
+                .max(Comparator.comparingLong(GalleryDlService::sizeOrZero))
+                .orElse(files.getFirst());
+        long totalSize = files.stream().mapToLong(GalleryDlService::sizeOrZero).sum();
+        String fileName = primaryFile.getFileName().toString();
+        int dotIdx = fileName.lastIndexOf('.');
+        String ext = dotIdx >= 0 ? fileName.substring(dotIdx + 1) : "mp4";
+        String fallbackName = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+
+        String title = extractTitleFromMetadata(outputDir, primaryFile);
+        if (title == null || title.isBlank()) {
+            title = fallbackName;
         }
 
-        if (!result.succeeded()) {
-            log.error("gallery-dl failed (exit {}): correlationId={}\n{}",
-                    result.exitCode(), request.correlationId(), result.output());
-            throw classify("gallery-dl exited with code " + result.exitCode(), result.output());
-        }
+        log.info("gallery-dl completed in {}ms: correlationId={} files={} totalSize={} title={}",
+                System.currentTimeMillis() - start, request.correlationId(), files.size(), totalSize, title);
+        return new DownloadResult(primaryFile, title, totalSize, ext, files);
+    }
 
-        throw new DownloadException("No files downloaded by gallery-dl");
+    static boolean isYtdlHost(String host) {
+        if (host == null) return false;
+        String h = host.toLowerCase(Locale.ROOT);
+        if (h.startsWith("www.")) h = h.substring(4);
+        return h.equals("youtube.com") || h.endsWith(".youtube.com")
+                || h.equals("youtu.be")
+                || h.equals("tiktok.com") || h.endsWith(".tiktok.com");
     }
 
     static String resolveTargetUrl(String url, DownloadSource source) {
@@ -221,20 +259,16 @@ public class GalleryDlService {
 
         String host = null;
         if (source != null && source.getHost() != null) {
-            host = source.getHost().toLowerCase(Locale.ROOT);
+            host = source.getHost();
         }
         if (host == null) {
             try {
                 var uri = URI.create(url);
                 host = uri.getHost();
-                if (host != null) {
-                    host = host.toLowerCase(Locale.ROOT);
-                    if (host.startsWith("www.")) host = host.substring(4);
-                }
             } catch (Exception ignored) {}
         }
 
-        if (host != null && YOUTUBE_HOSTS.contains(host)) {
+        if (isYtdlHost(host)) {
             return "ytdl:" + url;
         }
         return url;

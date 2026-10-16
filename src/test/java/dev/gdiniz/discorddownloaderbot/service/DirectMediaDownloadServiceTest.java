@@ -150,4 +150,26 @@ class DirectMediaDownloadServiceTest {
                 .isInstanceOf(DownloadException.class)
                 .hasMessageContaining("Content-Length (100000000) exceeds maximum limit");
     }
+
+    @Test
+    void htmlContentTypeIsRejectedFast() {
+        server.createContext("/page.html", exchange -> {
+            try {
+                exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+                byte[] body = "<html><body>Not a video</body></html>".getBytes();
+                exchange.sendResponseHeaders(200, body.length);
+                try (OutputStream os = exchange.getResponseBody()) {
+                    os.write(body);
+                }
+                exchange.close();
+            } catch (Exception ignored) {}
+        });
+
+        var req = new DownloadRequest("corr-html", "g1", "c1", "u1", "t1", null,
+                "http://127.0.0.1:" + port + "/page.html", "original");
+
+        assertThatThrownBy(() -> service.download(req, 10000))
+                .isInstanceOf(DownloadException.class)
+                .hasMessageContaining("rejected non-media content type");
+    }
 }

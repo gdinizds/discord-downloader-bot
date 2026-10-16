@@ -76,6 +76,15 @@ class GalleryDlServiceTest {
     }
 
     @Test
+    void tiktokUrlsArePrefixedWithYtdl() {
+        var req = request("corr-tiktok", "https://vt.tiktok.com/ZSgFEG4uJ/");
+        service.execute(req, null);
+
+        var lastCall = FakeTools.calls(tools).getLast();
+        assertThat(lastCall).contains("\"ytdl:https://vt.tiktok.com/ZSgFEG4uJ/\"");
+    }
+
+    @Test
     void twitterUrlsAreNotPrefixedWithYtdl() {
         var req = request("corr-tw", "https://twitter.com/user/status/123");
         service.execute(req, source);

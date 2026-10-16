@@ -146,6 +146,12 @@ public class DirectMediaDownloadService {
                 break;
             }
 
+            String contentType = response.headers().firstValue("Content-Type").orElse("").toLowerCase(Locale.ROOT);
+            if (contentType.contains("text/html") || contentType.contains("text/plain")) {
+                closeQuietly(response);
+                throw new DownloadException("Direct download rejected non-media content type: " + contentType);
+            }
+
             var contentLengthHeader = response.headers().firstValueAsLong("Content-Length");
             if (contentLengthHeader.isPresent() && contentLengthHeader.getAsLong() > maxBytes * 2) {
                 closeQuietly(response);
