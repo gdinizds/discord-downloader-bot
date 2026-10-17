@@ -236,6 +236,9 @@ public class DownloadOrchestrator implements DisposableBean {
                     if (timedOut.get() || directErr instanceof DownloadInterruptedException || directErr instanceof SourceBlockedException) {
                         throw directErr;
                     }
+                    if (directErr.getMessage() != null && directErr.getMessage().toLowerCase(java.util.Locale.ROOT).contains("exceed")) {
+                        throw directErr;
+                    }
                     log.info("Direct fast-path failed, attempting gallery-dl: correlationId={} error={}",
                             request.correlationId(), directErr.getMessage());
                     result = galleryDlService.execute(request, source, maxFileBytes);

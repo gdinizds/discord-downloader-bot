@@ -37,8 +37,10 @@ public class S3UploadService {
     public String upload(Path filePath, String guildId, String correlationId, int index) throws DownloadException {
         var fileName = filePath.getFileName().toString();
         var ext = fileName.contains(".") ? fileName.substring(fileName.lastIndexOf('.')) : "";
+        var safeGuild = (guildId != null && guildId.matches("^[a-zA-Z0-9_-]{1,64}$")) ? guildId : "dm";
+        var safeCorr = (correlationId != null && correlationId.matches("^[a-zA-Z0-9_-]{1,64}$")) ? correlationId : "job";
         var suffix = index > 0 ? "_" + index : "";
-        var s3Key = "%s/%s%s%s".formatted(guildId, correlationId, suffix, ext);
+        var s3Key = "%s/%s%s%s".formatted(safeGuild, safeCorr, suffix, ext);
 
         log.info("Uploading to S3: correlationId={} key={}", correlationId, s3Key);
         Span.current().setAttribute("s3.key", s3Key);

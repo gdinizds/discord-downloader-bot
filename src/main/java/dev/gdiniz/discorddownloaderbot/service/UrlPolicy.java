@@ -61,16 +61,22 @@ public class UrlPolicy {
         String lowerHost = host.toLowerCase(Locale.ROOT);
         if (lowerHost.equals("localhost") || lowerHost.endsWith(".localhost")
                 || lowerHost.endsWith(".local") || lowerHost.endsWith(".internal")
-                || lowerHost.endsWith(".cluster.local") || !lowerHost.contains(".") && !lowerHost.contains(":")) {
+                || lowerHost.endsWith(".cluster.local") || lowerHost.endsWith(".consul")
+                || lowerHost.endsWith(".svc") || lowerHost.endsWith(".arpa")
+                || (!lowerHost.contains(".") && !lowerHost.contains(":"))) {
             return Optional.of("internal host: " + host);
         }
 
         try {
-            for (InetAddress address : resolver.resolve(host)) {
+            InetAddress[] addresses = resolver.resolve(host);
+            if (addresses == null || addresses.length == 0) {
+                return Optional.of("unresolvable host: " + host);
+            }
+            for (InetAddress address : addresses) {
                 if (isInternal(address)) return Optional.of("host resolves to internal address: " + host);
             }
         } catch (UnknownHostException e) {
-            return Optional.empty();
+            return Optional.of("unresolvable host: " + host);
         }
         return Optional.empty();
     }
@@ -96,6 +102,15 @@ public class UrlPolicy {
             boolean mappedV4 = true;
             for (int i = 0; i < 10; i++) if (b[i] != 0) mappedV4 = false;
             if (mappedV4 && (b[10] & 0xff) == 0xff && (b[11] & 0xff) == 0xff) {
+                try {
+                    return isInternal(InetAddress.getByAddress(new byte[]{b[12], b[13], b[14], b[15]}));
+                } catch (UnknownHostException e) {
+                    return true;
+                }
+            }
+            boolean compatV4 = true;
+            for (int i = 0; i < 12; i++) if (b[i] != 0) compatV4 = false;
+            if (compatV4) {
                 try {
                     return isInternal(InetAddress.getByAddress(new byte[]{b[12], b[13], b[14], b[15]}));
                 } catch (UnknownHostException e) {

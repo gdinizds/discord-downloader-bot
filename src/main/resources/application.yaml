@@ -12,6 +12,7 @@ spring:
         enabled: true
         format: YAML
         data-key: data
+        acl-token: ${SPRING_CLOUD_CONSUL_CONFIG_ACL_TOKEN:}
 
   threads:
     virtual:
@@ -165,6 +166,9 @@ resilience4j:
       gallerydlBulkhead:
         maxConcurrentCalls: ${BULKHEAD_GALLERYDL_MAX_CONCURRENT:${BULKHEAD_YTDLP_MAX_CONCURRENT:15}}
         maxWaitDuration: ${BULKHEAD_GALLERYDL_MAX_WAIT:30s}
+      directDownloadBulkhead:
+        maxConcurrentCalls: ${BULKHEAD_DIRECT_MAX_CONCURRENT:8}
+        maxWaitDuration: 10s
       ffmpegBulkhead:
         maxConcurrentCalls: ${BULKHEAD_FFMPEG_MAX_CONCURRENT:8}
         maxWaitDuration: ${BULKHEAD_FFMPEG_MAX_WAIT:30s}
@@ -176,7 +180,7 @@ management:
         include: health, info, prometheus, metrics, circuitbreakers, retries
   endpoint:
     health:
-      show-details: always
+      show-details: when_authorized
       probes:
         enabled: true
   health:

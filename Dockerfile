@@ -31,10 +31,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get purge -y --auto-remove curl unzip \
     && rm -rf /var/lib/apt/lists/*
 
+ENV PYTHONUSERBASE=/app/pydeps
+ENV PATH=/app/pydeps/bin:$PATH
+
 RUN groupadd -r app && useradd -r -g app -u 1001 app \
-    && mkdir -p /tmp/discord-downloads \
-    && chown app:app /tmp/discord-downloads \
-    && chown -R app:app /usr/local/bin /usr/local/lib/python3*/dist-packages
+    && mkdir -p /tmp/discord-downloads /app/pydeps /app/cookies \
+    && chown -R app:app /tmp/discord-downloads /app/pydeps /app/cookies
 
 COPY --from=build --chown=app:app /workspace/build/native/nativeCompile/discord-downloader-bot ./discord-downloader-bot
 COPY --chown=app:app entrypoint.sh entrypoint.sh

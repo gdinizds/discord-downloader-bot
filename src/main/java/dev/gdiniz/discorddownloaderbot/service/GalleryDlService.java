@@ -24,6 +24,7 @@ import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -380,6 +381,9 @@ public class GalleryDlService {
         try {
             Files.createDirectories(target.getParent());
             Files.copy(shared, target, StandardCopyOption.REPLACE_EXISTING);
+            try {
+                Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"));
+            } catch (Exception ignored) {}
             return target;
         } catch (IOException e) {
             throw new DownloadException("Failed to prepare private cookie file", e);

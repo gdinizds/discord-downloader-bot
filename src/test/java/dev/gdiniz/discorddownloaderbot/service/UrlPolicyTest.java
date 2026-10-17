@@ -31,8 +31,7 @@ class UrlPolicyTest {
     @ValueSource(strings = {
             "https://youtube.com/watch?v=abc",
             "http://www.tiktok.com/@user/video/1",
-            "https://8.8.8.8/video.mp4",
-            "https://unknown-host.example/clip"
+            "https://8.8.8.8/video.mp4"
     })
     void publicUrlsAreAccepted(String url) {
         assertThat(policy.rejectionReason(url)).isEmpty();
@@ -48,6 +47,10 @@ class UrlPolicyTest {
             "http://localhost:8080/actuator",
             "http://garage:3900/bucket/key",
             "http://consul-server.consul.svc.cluster.local:8500/v1/kv",
+            "http://consul-server.consul:8500/v1/kv",
+            "http://app.default.svc:8080/api",
+            "http://node.in-addr.arpa/test",
+            "https://unknown-host.example/clip",
             "http://127.0.0.1/x",
             "http://10.1.2.3/x",
             "http://192.168.0.10/x",
@@ -56,6 +59,7 @@ class UrlPolicyTest {
             "http://169.254.169.254/latest/meta-data",
             "http://[::1]/x",
             "http://[::ffff:127.0.0.1]/x",
+            "http://[::127.0.0.1]/x",
             "http://[fd00::1]/x",
             "http://rebind.example/x",
             "http://metadata.example/x",

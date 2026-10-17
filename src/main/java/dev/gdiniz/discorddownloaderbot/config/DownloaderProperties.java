@@ -71,5 +71,10 @@ public record DownloaderProperties(
                 region = "garage";
             }
         }
+
+        @Override
+        public String toString() {
+            return "S3Properties[endpoint=" + endpoint + ", bucket=" + bucket + ", accessKey=" + accessKey + ", secretKey=***, region=" + region + "]";
+        }
     }
 }

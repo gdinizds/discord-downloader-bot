@@ -35,6 +35,8 @@ public class EventConsumer {
         this.executor = executor;
     }
 
+    private static final java.util.regex.Pattern SAFE_ID = java.util.regex.Pattern.compile("^[a-zA-Z0-9_-]{1,64}$");
+
     @KafkaListener(
             topics = "${topics.inbound-interactions}",
             groupId = "discord-downloader",
@@ -47,6 +49,10 @@ public class EventConsumer {
 
         try {
             var event = objectMapper.readValue(payload, DiscordEventPayload.class);
+            if (event.correlationId() == null || !SAFE_ID.matcher(event.correlationId()).matches()) {
+                log.warn("Invalid correlationId in interaction event: {}", event.correlationId());
+                return;
+            }
             var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in interaction event: correlationId={}", event.correlationId());
@@ -80,6 +86,10 @@ public class EventConsumer {
 
         try {
             var event = objectMapper.readValue(payload, DiscordEventPayload.class);
+            if (event.correlationId() == null || !SAFE_ID.matcher(event.correlationId()).matches()) {
+                log.warn("Invalid correlationId in message command event: {}", event.correlationId());
+                return;
+            }
             var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in message command: correlationId={}", event.correlationId());

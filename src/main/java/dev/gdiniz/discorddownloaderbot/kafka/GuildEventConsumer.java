@@ -47,7 +47,8 @@ public class GuildEventConsumer {
             if (raw == null || !"boostTier".equals(raw.field()) || raw.tier() == null) return;
 
             var tier = raw.tier();
-            var config = GuildConfig.from(guildId, tier.level(), tier.maxFileSizeBytes(), tier.maxBitrateKbps());
+            long safeMaxBytes = Math.min(Math.max(tier.maxFileSizeBytes(), 1_048_576L), 500L * 1_048_576L);
+            var config = GuildConfig.from(guildId, tier.level(), safeMaxBytes, tier.maxBitrateKbps());
             guildConfigRepository.save(config);
             guildConfigCache.put(guildId, config);
 

@@ -3,23 +3,30 @@ set -e
 
 export LANG=C.UTF-8
 export LC_ALL=C.UTF-8
+export PYTHONUSERBASE=/app/pydeps
+export PATH="/app/pydeps/bin:$PATH"
 
 if [ -d /app/cookies-secret ]; then
     echo "Copying downloader cookies to writable location..."
     mkdir -p /app/cookies
-    cp /app/cookies-secret/*.txt /app/cookies/
+    for f in /app/cookies-secret/*.txt; do
+        if [ -f "$f" ]; then
+            cp "$f" /app/cookies/
+            chmod 600 "/app/cookies/$(basename "$f")"
+        fi
+    done
 fi
 
 echo "Updating yt-dlp and gallery-dl..."
-if pip3 install --no-cache-dir --break-system-packages --quiet -U "yt-dlp[default,curl-cffi]" gallery-dl; then
-    echo "Tools updated: yt-dlp $(yt-dlp --version), gallery-dl $(gallery-dl --version)"
+if pip3 install --user --no-cache-dir --break-system-packages --quiet --only-binary :all: -U "yt-dlp[default,curl-cffi]" gallery-dl; then
+    echo "Tools updated: yt-dlp $(yt-dlp --version 2>/dev/null || echo 'N/A'), gallery-dl $(gallery-dl --version 2>/dev/null || echo 'N/A')"
 else
     echo "Tools update failed, continuing with existing versions"
 fi
 
 if [ -f "./discord-downloader-bot" ]; then
     echo "Starting GraalVM Native Image..."
-    exec ./discord-downloader-bot -XX:MaximumHeapSizePercent=${NATIVE_MAX_HEAP_PERCENT:-50} ${NATIVE_OPTS:-}
+    exec ./discord-downloader-bot "-XX:MaximumHeapSizePercent=${NATIVE_MAX_HEAP_PERCENT:-50}" ${NATIVE_OPTS:-}
 else
     echo "Starting GraalVM JVM..."
 

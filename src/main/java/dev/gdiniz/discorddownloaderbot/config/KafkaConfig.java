@@ -12,9 +12,11 @@ import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.core.ProducerFactory;
 
+import org.springframework.kafka.listener.DefaultErrorHandler;
+import org.springframework.util.backoff.FixedBackOff;
+
 import java.util.Map;
 import java.util.concurrent.Executor;
-import java.util.concurrent.Executors;
 
 @Configuration
 public class KafkaConfig {
@@ -29,6 +31,7 @@ public class KafkaConfig {
         factory.setConsumerFactory(consumerFactory);
         factory.getContainerProperties()
                 .setListenerTaskExecutor(new VirtualThreadTaskExecutor("kafka-listener-"));
+        factory.setCommonErrorHandler(new DefaultErrorHandler(new FixedBackOff(1000L, 2L)));
         return factory;
     }
 
@@ -50,6 +53,6 @@ public class KafkaConfig {
 
     @Bean(name = "downloadTaskExecutor")
     public Executor downloadTaskExecutor() {
-        return Executors.newVirtualThreadPerTaskExecutor();
+        return Runnable::run;
     }
 }

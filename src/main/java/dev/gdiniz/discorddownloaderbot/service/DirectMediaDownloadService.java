@@ -7,6 +7,7 @@ import dev.gdiniz.discorddownloaderbot.dto.DownloadInterruptedException;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadRequest;
 import dev.gdiniz.discorddownloaderbot.dto.DownloadResult;
 import dev.gdiniz.discorddownloaderbot.dto.SourceBlockedException;
+import io.github.resilience4j.bulkhead.annotation.Bulkhead;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -70,6 +71,7 @@ public class DirectMediaDownloadService {
         return false;
     }
 
+    @Bulkhead(name = "directDownloadBulkhead")
     public DownloadResult download(DownloadRequest request, long maxBytes) throws DownloadException {
         Path outputDir = Path.of(properties.tmpDir(), request.correlationId());
         try {
@@ -160,7 +162,12 @@ public class DirectMediaDownloadService {
             }
 
             String filename = deriveFilename(currentUri.toString(), response);
-            Path targetFile = outputDir.resolve(filename);
+            Path targetFile = outputDir.resolve(filename).normalize();
+            if (!targetFile.startsWith(outputDir.normalize()) || targetFile.equals(outputDir.normalize())) {
+                log.warn("Path traversal or invalid filename detected: {} - falling back to safe name", filename);
+                filename = "download." + extensionFromMime(contentType);
+                targetFile = outputDir.resolve(filename).normalize();
+            }
 
             long written = 0;
             try (InputStream in = response.body();
