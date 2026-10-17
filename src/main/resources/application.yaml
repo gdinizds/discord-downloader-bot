@@ -1,6 +1,11 @@
+server:
+  shutdown: graceful
+
 spring:
   application:
     name: discord-downloader-bot
+  lifecycle:
+    timeout-per-shutdown-phase: 250s
   config:
     import: "optional:consul:,optional:file:/vault/secrets/db.yaml,optional:file:/vault/secrets/s3.yaml,optional:file:/vault/secrets/discord.yaml"
 
@@ -32,17 +37,26 @@ spring:
     consumer:
       group-id: discord-downloader
       auto-offset-reset: earliest
+      max-poll-records: 1
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       properties:
         key.deserializer.encoding: UTF-8
         value.deserializer.encoding: UTF-8
+        max.poll.interval.ms: 900000
+        partition.assignment.strategy: org.apache.kafka.clients.consumer.CooperativeStickyAssignor
     producer:
+      acks: all
+      compression-type: lz4
       properties:
         key.serializer.encoding: UTF-8
         value.serializer.encoding: UTF-8
+        enable.idempotence: true
+        linger.ms: 5
+        batch.size: 32768
 
   jpa:
+    open-in-view: false
     hibernate:
       ddl-auto: validate
     properties:

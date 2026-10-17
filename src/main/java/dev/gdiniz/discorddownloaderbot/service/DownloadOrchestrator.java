@@ -34,12 +34,15 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 
 @Service
 public class DownloadOrchestrator implements DisposableBean {
@@ -72,7 +75,33 @@ public class DownloadOrchestrator implements DisposableBean {
 
     private final Map<String, CachedSource> sourceCache = new ConcurrentHashMap<>();
     private final AtomicInteger inFlight = new AtomicInteger();
-    private final Object drainLock = new Object();
+    private final ReentrantLock drainLock = new ReentrantLock();
+    private final Condition drainedCondition = drainLock.newCondition();
+
+    private static final Set<String> KNOWN_HOST_DOMAINS = Set.of(
+            "youtube.com", "youtu.be",
+            "tiktok.com",
+            "instagram.com",
+            "twitter.com", "x.com",
+            "reddit.com", "redd.it",
+            "facebook.com", "fb.watch",
+            "twitch.tv",
+            "pinterest.com",
+            "threads.net",
+            "bluesky.app", "bsky.app"
+    );
+
+    static String normalizeMetricHost(String host) {
+        if (host == null || host.isBlank() || "unknown".equalsIgnoreCase(host)) {
+            return "unknown";
+        }
+        for (String known : KNOWN_HOST_DOMAINS) {
+            if (host.equals(known) || host.endsWith("." + known)) {
+                return known;
+            }
+        }
+        return "other";
+    }
 
     @Autowired
     public DownloadOrchestrator(GalleryDlService galleryDlService,
@@ -129,18 +158,18 @@ public class DownloadOrchestrator implements DisposableBean {
 
     @Override
     public void destroy() {
-        long deadline = System.currentTimeMillis()
-                + TimeUnit.SECONDS.toMillis(properties.processingTimeoutSeconds() + 5L);
-        synchronized (drainLock) {
-            while (inFlight.get() > 0 && System.currentTimeMillis() < deadline) {
+        long timeoutMillis = TimeUnit.SECONDS.toMillis(properties.processingTimeoutSeconds() + 5L);
+        long nanosTimeout = TimeUnit.MILLISECONDS.toNanos(timeoutMillis);
+        drainLock.lock();
+        try {
+            while (inFlight.get() > 0 && nanosTimeout > 0) {
                 log.info("Waiting for {} in-flight download(s) before shutdown", inFlight.get());
-                try {
-                    drainLock.wait(Math.max(1, deadline - System.currentTimeMillis()));
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    break;
-                }
+                nanosTimeout = drainedCondition.awaitNanos(nanosTimeout);
             }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            drainLock.unlock();
         }
         timeoutScheduler.shutdownNow();
     }
@@ -155,8 +184,11 @@ public class DownloadOrchestrator implements DisposableBean {
             doProcess(request);
         } finally {
             if (inFlight.decrementAndGet() == 0) {
-                synchronized (drainLock) {
-                    drainLock.notifyAll();
+                drainLock.lock();
+                try {
+                    drainedCondition.signalAll();
+                } finally {
+                    drainLock.unlock();
                 }
             }
         }
@@ -164,6 +196,7 @@ public class DownloadOrchestrator implements DisposableBean {
 
     private void doProcess(DownloadRequest request) {
         var host = extractHost(request.url());
+        var metricHost = normalizeMetricHost(host);
         boolean isInteraction = request.interactionToken() != null;
 
         var rejection = urlPolicy.rejectionReason(request.url());
@@ -187,7 +220,7 @@ public class DownloadOrchestrator implements DisposableBean {
         span.setAttribute("download.qualidade", request.qualidade());
 
         meterRegistry.counter("downloader.job.started",
-                "source_host", host, "qualidade", request.qualidade()).increment();
+                "source_host", metricHost, "qualidade", request.qualidade()).increment();
 
         long startTime = System.currentTimeMillis();
         Path workDir = Path.of(properties.tmpDir(), request.correlationId());
@@ -325,7 +358,7 @@ public class DownloadOrchestrator implements DisposableBean {
                         responseProducer.send(buildReply(request, isInteraction, announced.get(), msg, null, null, true));
                         job.markFailed("File too large after compression: %.1f MB".formatted(mb));
                         jobRepository.save(job);
-                        countFailure(host, request, "too_large");
+                        countFailure(metricHost, request, "too_large");
                         return;
                     }
                 }
@@ -355,10 +388,10 @@ public class DownloadOrchestrator implements DisposableBean {
             jobRepository.save(job);
 
             long elapsed = System.currentTimeMillis() - startTime;
-            meterRegistry.timer("downloader.job.duration", "source_host", host, "qualidade", request.qualidade())
+            meterRegistry.timer("downloader.job.duration", "source_host", metricHost, "qualidade", request.qualidade())
                     .record(elapsed, TimeUnit.MILLISECONDS);
-            meterRegistry.counter("downloader.job.completed", "source_host", host, "qualidade", request.qualidade()).increment();
-            meterRegistry.summary("downloader.file.size", "source_host", host).record(totalActualSize);
+            meterRegistry.counter("downloader.job.completed", "source_host", metricHost, "qualidade", request.qualidade()).increment();
+            meterRegistry.summary("downloader.file.size", "source_host", metricHost).record(totalActualSize);
 
         } catch (Exception e) {
             Thread.interrupted();
@@ -383,7 +416,7 @@ public class DownloadOrchestrator implements DisposableBean {
                     log.error("Failed to persist job failure: correlationId={}", request.correlationId(), persistError);
                 }
             }
-            countFailure(host, request, reason);
+            countFailure(metricHost, request, reason);
         } finally {
             timeoutTask.cancel(false);
             Thread.interrupted();
@@ -409,8 +442,8 @@ public class DownloadOrchestrator implements DisposableBean {
         return e.getClass().getSimpleName();
     }
 
-    private void countFailure(String host, DownloadRequest request, String reason) {
-        meterRegistry.counter("downloader.job.failed", "source_host", host,
+    private void countFailure(String metricHost, DownloadRequest request, String reason) {
+        meterRegistry.counter("downloader.job.failed", "source_host", metricHost,
                 "qualidade", request.qualidade(), "reason", reason).increment();
     }
 

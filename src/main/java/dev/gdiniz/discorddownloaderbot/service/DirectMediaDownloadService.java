@@ -172,7 +172,7 @@ public class DirectMediaDownloadService {
             long written = 0;
             try (InputStream in = response.body();
                  OutputStream out = Files.newOutputStream(targetFile)) {
-                byte[] buffer = new byte[8192];
+                byte[] buffer = new byte[65536];
                 int read;
                 while ((read = in.read(buffer)) != -1) {
                     written += read;

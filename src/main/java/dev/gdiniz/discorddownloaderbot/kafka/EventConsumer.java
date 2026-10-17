@@ -14,6 +14,8 @@ import org.springframework.messaging.handler.annotation.Header;
 import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.stereotype.Component;
 
+import org.slf4j.MDC;
+
 import java.util.Locale;
 import java.util.concurrent.Executor;
 
@@ -53,6 +55,9 @@ public class EventConsumer {
                 log.warn("Invalid correlationId in interaction event: {}", event.correlationId());
                 return;
             }
+            MDC.put("correlationId", event.correlationId());
+            if (event.guildId() != null) MDC.put("guildId", event.guildId());
+
             var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in interaction event: correlationId={}", event.correlationId());
@@ -68,9 +73,19 @@ public class EventConsumer {
                     url,
                     normalizeQualidade(event.extractQualidade())
             );
-            executor.execute(() -> orchestrator.process(request));
+            executor.execute(() -> {
+                MDC.put("correlationId", request.correlationId());
+                if (request.guildId() != null) MDC.put("guildId", request.guildId());
+                try {
+                    orchestrator.process(request);
+                } finally {
+                    MDC.clear();
+                }
+            });
         } catch (Exception e) {
             log.error("Failed to process interaction event", e);
+        } finally {
+            MDC.clear();
         }
     }
 
@@ -90,6 +105,9 @@ public class EventConsumer {
                 log.warn("Invalid correlationId in message command event: {}", event.correlationId());
                 return;
             }
+            MDC.put("correlationId", event.correlationId());
+            if (event.guildId() != null) MDC.put("guildId", event.guildId());
+
             var url = UrlPolicy.normalize(event.extractUrl());
             if (url == null || url.isBlank()) {
                 log.warn("Missing URL in message command: correlationId={}", event.correlationId());
@@ -105,9 +123,19 @@ public class EventConsumer {
                     url,
                     "original"
             );
-            executor.execute(() -> orchestrator.process(request));
+            executor.execute(() -> {
+                MDC.put("correlationId", request.correlationId());
+                if (request.guildId() != null) MDC.put("guildId", request.guildId());
+                try {
+                    orchestrator.process(request);
+                } finally {
+                    MDC.clear();
+                }
+            });
         } catch (Exception e) {
             log.error("Failed to process message command event", e);
+        } finally {
+            MDC.clear();
         }
     }
 

@@ -130,7 +130,6 @@ public class GalleryDlService {
             return buildResult(outputDir, files, request, start);
         }
 
-        // If native extractor produced no files and URL wasn't already ytdl-prefixed, retry with ytdl:
         if (!targetUrl.startsWith("ytdl:")) {
             log.info("gallery-dl native extraction returned no files, retrying with ytdl backend: correlationId={} url={}",
                     request.correlationId(), request.url());
@@ -164,7 +163,6 @@ public class GalleryDlService {
         cmd.add("--write-metadata");
         cmd.add("--write-info-json");
 
-        // Enable unified ytdl (yt-dlp) integration
         cmd.add("-o");
         cmd.add("extractor.ytdl.enabled=true");
         cmd.add("-o");
@@ -172,20 +170,17 @@ public class GalleryDlService {
         cmd.add("-o");
         cmd.add("downloader.ytdl.forward-cookies=true");
 
-        // Format selector
         String formatSelector = resolveFormatSelector(source != null ? source.getFormatSelector() : null, request.qualidade());
         if (formatSelector != null && !formatSelector.isBlank()) {
             cmd.add("-o");
             cmd.add("extractor.ytdl.format=" + formatSelector);
         }
 
-        // yt-dlp raw-options for giant video protection and clean outputs (primitives only, match_filter is passed via cmdline-args)
-        long maxFileSize = Math.max(104857600L, maxBytes * 3); // cap at ~75MB-100MB minimum
+        long maxFileSize = Math.max(104857600L, maxBytes * 3);
         cmd.add("-o");
         cmd.add("extractor.ytdl.raw-options={\"noplaylist\":true,\"merge_output_format\":\"mp4\",\"max_filesize\":"
                 + maxFileSize + "}");
 
-        // Forward duration filter and extra yt-dlp arguments from source via cmdline-args
         List<String> ytdlExtra = new ArrayList<>();
         ytdlExtra.add("--match-filter");
         ytdlExtra.add("duration <=? 3600");
@@ -303,7 +298,7 @@ public class GalleryDlService {
             String arg = extraArgs[i];
             if (MANAGED_FLAGS.contains(arg)) continue;
             if (COOKIE_FLAGS.contains(arg)) {
-                i++; // skip cookie path
+                i++;
                 continue;
             }
             list.add(arg);
