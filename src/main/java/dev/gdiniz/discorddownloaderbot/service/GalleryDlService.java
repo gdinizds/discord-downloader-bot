@@ -160,6 +160,8 @@ public class GalleryDlService {
         cmd.add("");
         cmd.add("--range");
         cmd.add("1-10");
+        cmd.add("--retries");
+        cmd.add("0");
         cmd.add("--write-metadata");
         cmd.add("--write-info-json");
 
@@ -241,12 +243,23 @@ public class GalleryDlService {
     }
 
     static boolean isYtdlHost(String host) {
+        return isYtdlHost(host, null);
+    }
+
+    static boolean isYtdlHost(String host, String url) {
         if (host == null) return false;
         String h = host.toLowerCase(Locale.ROOT);
         if (h.startsWith("www.")) h = h.substring(4);
-        return h.equals("youtube.com") || h.endsWith(".youtube.com")
+        if (h.equals("youtube.com") || h.endsWith(".youtube.com")
                 || h.equals("youtu.be")
-                || h.equals("tiktok.com") || h.endsWith(".tiktok.com");
+                || h.equals("tiktok.com") || h.endsWith(".tiktok.com")) {
+            return true;
+        }
+        if ((h.equals("instagram.com") || h.endsWith(".instagram.com")) && url != null) {
+            String u = url.toLowerCase(Locale.ROOT);
+            return u.contains("/reel/") || u.contains("/reels/") || u.contains("/tv/");
+        }
+        return false;
     }
 
     static String resolveTargetUrl(String url, DownloadSource source) {
@@ -264,7 +277,7 @@ public class GalleryDlService {
             } catch (Exception ignored) {}
         }
 
-        if (isYtdlHost(host)) {
+        if (isYtdlHost(host, url)) {
             return "ytdl:" + url;
         }
         return url;

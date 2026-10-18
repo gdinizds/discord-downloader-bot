@@ -62,6 +62,8 @@ class GalleryDlServiceTest {
         assertThat(lastCall).contains("downloader.ytdl.forward-cookies=true");
         assertThat(lastCall).contains("--range");
         assertThat(lastCall).contains("1-10");
+        assertThat(lastCall).contains("--retries");
+        assertThat(lastCall).contains("0");
         assertThat(lastCall).contains("extractor.ytdl.raw-options");
     }
 
@@ -92,6 +94,15 @@ class GalleryDlServiceTest {
         var lastCall = FakeTools.calls(tools).getLast();
         assertThat(lastCall).contains("\"https://twitter.com/user/status/123\"");
         assertThat(lastCall).doesNotContain("\"ytdl:https://twitter.com/user/status/123\"");
+    }
+
+    @Test
+    void instagramReelUrlsArePrefixedWithYtdl() {
+        var req = request("corr-ig-reel", "https://www.instagram.com/reel/DZFzMKHtmoQ/");
+        service.execute(req, null);
+
+        var lastCall = FakeTools.calls(tools).getLast();
+        assertThat(lastCall).contains("\"ytdl:https://www.instagram.com/reel/DZFzMKHtmoQ/\"");
     }
 
     @Test
