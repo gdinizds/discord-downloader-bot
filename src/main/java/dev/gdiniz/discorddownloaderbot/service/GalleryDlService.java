@@ -162,6 +162,8 @@ public class GalleryDlService {
         cmd.add("1-10");
         cmd.add("--retries");
         cmd.add("0");
+        cmd.add("--filename");
+        cmd.add("{title[:80]}-{id}.{extension}");
         cmd.add("--write-metadata");
         cmd.add("--write-info-json");
 
@@ -180,7 +182,7 @@ public class GalleryDlService {
 
         long maxFileSize = Math.max(104857600L, maxBytes * 3);
         cmd.add("-o");
-        cmd.add("extractor.ytdl.raw-options={\"noplaylist\":true,\"merge_output_format\":\"mp4\",\"max_filesize\":"
+        cmd.add("extractor.ytdl.raw-options={\"noplaylist\":true,\"merge_output_format\":\"mp4\",\"trim_file_name\":80,\"max_filesize\":"
                 + maxFileSize + "}");
 
         List<String> ytdlExtra = new ArrayList<>();
@@ -252,7 +254,9 @@ public class GalleryDlService {
         if (h.startsWith("www.")) h = h.substring(4);
         if (h.equals("youtube.com") || h.endsWith(".youtube.com")
                 || h.equals("youtu.be")
-                || h.equals("tiktok.com") || h.endsWith(".tiktok.com")) {
+                || h.equals("tiktok.com") || h.endsWith(".tiktok.com")
+                || h.equals("facebook.com") || h.endsWith(".facebook.com")
+                || h.equals("fb.watch") || h.endsWith(".fb.watch")) {
             return true;
         }
         if ((h.equals("instagram.com") || h.endsWith(".instagram.com")) && url != null) {

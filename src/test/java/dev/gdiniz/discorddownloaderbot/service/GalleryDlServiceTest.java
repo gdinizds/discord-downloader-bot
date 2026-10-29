@@ -64,7 +64,19 @@ class GalleryDlServiceTest {
         assertThat(lastCall).contains("1-10");
         assertThat(lastCall).contains("--retries");
         assertThat(lastCall).contains("0");
+        assertThat(lastCall).contains("--filename");
+        assertThat(lastCall).contains("{title[:80]}-{id}.{extension}");
         assertThat(lastCall).contains("extractor.ytdl.raw-options");
+        assertThat(lastCall).contains("trim_file_name");
+    }
+
+    @Test
+    void facebookUrlsArePrefixedWithYtdl() {
+        var req = request("corr-fb", "https://www.facebook.com/share/r/18ppJKiKgn/");
+        service.execute(req, null);
+
+        var lastCall = FakeTools.calls(tools).getLast();
+        assertThat(lastCall).contains("\"ytdl:https://www.facebook.com/share/r/18ppJKiKgn/\"");
     }
 
     @Test
