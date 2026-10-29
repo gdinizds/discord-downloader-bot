@@ -148,7 +148,7 @@ public class GalleryDlService {
             throw classify("gallery-dl exited with code " + result.exitCode(), result.output());
         }
 
-        throw new DownloadException("No files downloaded by gallery-dl");
+        throw classify("No files downloaded by gallery-dl", result.output());
     }
 
     List<String> buildGalleryDlCommand(DownloadRequest request, DownloadSource source, long maxBytes, Path outputDir, String targetUrl) {

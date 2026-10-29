@@ -158,6 +158,15 @@ class GalleryDlServiceTest {
     }
 
     @Test
+    void classifyTreatsBotVerificationAndRotatedCookiesAsBlocked() {
+        var ex1 = GalleryDlService.classify("failed", "ERROR: [youtube] 123: Sign in to confirm you’re not a bot.");
+        assertThat(ex1).isInstanceOf(SourceBlockedException.class);
+
+        var ex2 = GalleryDlService.classify("failed", "The provided YouTube account cookies are no longer valid. They have likely been rotated in the browser");
+        assertThat(ex2).isInstanceOf(SourceBlockedException.class);
+    }
+
+    @Test
     void infrastructureErrorsAreNotClassifiedAsUnavailable() {
         assertThatThrownBy(() -> service.execute(request("corr-broken", "https://twitter.com/broken/status/1"), source))
                 .isInstanceOf(DownloadException.class)
